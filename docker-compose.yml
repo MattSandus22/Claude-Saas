@@ -1,0 +1,65 @@
+# MCPGuard full-stack local/production-like stack.
+# Usage: cp backend/.env.example backend/.env  (edit JWT_SECRET), then:
+#   docker compose up --build
+#
+# Services: Postgres, Redis, FastAPI backend, Next.js frontend.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mcpguard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcpguard_dev_pw}
+      POSTGRES_DB: mcpguard
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcpguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENV: production
+      # In real deployments inject JWT_SECRET from a secrets manager, not compose.
+      JWT_SECRET: ${JWT_SECRET:-please-override-me-in-production}
+      DATABASE_URL: postgresql+asyncpg://mcpguard:${POSTGRES_PASSWORD:-mcpguard_dev_pw}@db:5432/mcpguard
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: http://localhost:3000
+      FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL:-admin@mcpguard.local}
+      FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:-ChangeMe!Admin123}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
