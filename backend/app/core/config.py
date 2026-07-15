@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # CORS: comma-separated origins. Never use "*" together with credentials.
     CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000"])
 
+    # Behavioral anomaly thresholds (R6-R8). Tune per deployment; conservative
+    # defaults. Window values are seconds.
+    ANOMALY_RAPID_FIRE_WINDOW_S: int = 60
+    ANOMALY_RAPID_FIRE_THRESHOLD: int = 30
+    ANOMALY_BLOCKED_WINDOW_S: int = 600
+    ANOMALY_BLOCKED_THRESHOLD: int = 3
+    ANOMALY_ENUM_WINDOW_S: int = 300
+    ANOMALY_ENUM_DISTINCT_TOOLS: int = 10
+    ANOMALY_DEDUPE_WINDOW_S: int = 600
+
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"

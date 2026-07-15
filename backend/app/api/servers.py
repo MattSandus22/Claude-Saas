@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import Principal, get_current_user, get_ingest_principal, require_admin
 from app.db.session import get_db
 from app.detection.rules import analyze_tool_definition, combine_score
-from app.models import MCPServer, MCPTool, ServerStatus, User
+from app.models import Alert, AlertStatus, MCPServer, MCPTool, ServerStatus, Severity, User
 from app.schemas import (
     MCPServerCreate,
     MCPServerOut,
@@ -20,6 +22,8 @@ from app.schemas import (
 )
 from app.services.audit import record
 from app.services.discovery import scan_files
+from app.services.drift import diff_tool_sets, fingerprint_tool
+from app.services.notify import notify_alerts
 
 router = APIRouter(prefix="/servers", tags=["servers"])
 
@@ -38,6 +42,7 @@ async def _analyze_and_attach_tools(server: MCPServer, tools) -> float:
                 input_schema=t.input_schema,
                 is_suspicious=risk >= 35.0,
                 risk_score=risk,
+                fingerprint=fingerprint_tool(t.name, t.description, t.input_schema),
             )
         )
     return max_risk
@@ -49,22 +54,76 @@ async def register_server(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(get_ingest_principal),
 ):
-    """Register a server (and optionally its tool definitions, which are scanned)."""
-    server = MCPServer(
-        name=body.name,
-        endpoint=body.endpoint,
-        transport=body.transport,
-        source=body.source,
-        status=ServerStatus.active,
+    """Register a server (and optionally its tool definitions, which are scanned).
+
+    Idempotent by endpoint: re-registering an existing server refreshes its
+    tool set and runs **drift detection (R9)** — a changed tool definition
+    after the initial baseline is the classic MCP "rug pull" and raises a
+    high-severity alert with before/after fingerprints.
+    """
+    existing = await db.execute(
+        select(MCPServer)
+        .options(selectinload(MCPServer.tools))
+        .where(MCPServer.endpoint == body.endpoint)
     )
-    max_risk = await _analyze_and_attach_tools(server, body.tools)
-    server.risk_score = max_risk
-    db.add(server)
+    server = existing.scalar_one_or_none()
+    drift_alerts: list[Alert] = []
+
+    if server is None:
+        server = MCPServer(
+            name=body.name,
+            endpoint=body.endpoint,
+            transport=body.transport,
+            source=body.source,
+            status=ServerStatus.active,
+        )
+        max_risk = await _analyze_and_attach_tools(server, body.tools)
+        server.risk_score = max_risk
+        db.add(server)
+        action = "server.register"
+    else:
+        # Drift pass: compare the approved baseline against the new report.
+        # A server first seen without tools (e.g. via static scan) has no
+        # baseline yet — its first tool report establishes one, no alerts.
+        old_fps = {t.name: t.fingerprint for t in server.tools if t.fingerprint}
+        if old_fps:
+            new_fps = {
+                t.name: fingerprint_tool(t.name, t.description, t.input_schema)
+                for t in body.tools
+            }
+            for f in diff_tool_sets(old_fps, new_fps, server_name=server.name):
+                drift_alerts.append(
+                    Alert(
+                        server_id=server.id,
+                        rule_id=f.rule_id,
+                        title=f.title,
+                        description=f.detail,
+                        severity=Severity(f.severity),
+                        status=AlertStatus.open,
+                        evidence=f.evidence,
+                    )
+                )
+
+        # Replace the tool set with the fresh report (re-scanned for poisoning).
+        server.tools.clear()
+        max_risk = await _analyze_and_attach_tools(server, body.tools)
+        server.risk_score = max(server.risk_score, max_risk)
+        server.last_seen = datetime.now(timezone.utc)
+        if server.status == ServerStatus.discovered:
+            server.status = ServerStatus.active
+        for alert in drift_alerts:
+            db.add(alert)
+        action = "server.reregister"
+
     await db.commit()
+    for alert in drift_alerts:
+        await db.refresh(alert)
+    await notify_alerts(drift_alerts)
+
     # Re-load with tools eagerly for the response.
     server = await _get_server_or_404(db, server.id)
-    await record(db, actor=principal.actor, action="server.register", target=server.id,
-                 detail={"risk": max_risk})
+    await record(db, actor=principal.actor, action=action, target=server.id,
+                 detail={"risk": max_risk, "drift_alerts": len(drift_alerts)})
     return server
 
 

@@ -23,21 +23,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models import Alert, AlertStatus, MCPEvent
 
-# Thresholds are intentionally conservative defaults; Phase 3 makes them
-# per-org configurable.
-RAPID_FIRE_WINDOW_S = 60
-RAPID_FIRE_THRESHOLD = 30
-
-BLOCKED_WINDOW_S = 600
-BLOCKED_THRESHOLD = 3
-
-ENUM_WINDOW_S = 300
-ENUM_DISTINCT_TOOLS = 10
-
-# Suppress duplicate alerts for the same rule+agent inside this window.
-DEDUPE_WINDOW_S = 600
+# Thresholds live in core/config.py (ANOMALY_* env settings) and are read at
+# call time, so deployments tune them without code changes.
 
 
 @dataclass
@@ -52,7 +42,7 @@ class AnomalyFinding:
 async def _recent_alert_exists(
     db: AsyncSession, rule_id: str, agent_id: str | None
 ) -> bool:
-    since = datetime.now(timezone.utc) - timedelta(seconds=DEDUPE_WINDOW_S)
+    since = datetime.now(timezone.utc) - timedelta(seconds=settings.ANOMALY_DEDUPE_WINDOW_S)
     stmt = select(func.count(Alert.id)).where(
         Alert.rule_id == rule_id,
         Alert.status == AlertStatus.open,
@@ -85,7 +75,9 @@ async def detect_anomalies(
     findings: list[AnomalyFinding] = []
 
     # R6: rapid-fire volume.
-    since = now - timedelta(seconds=RAPID_FIRE_WINDOW_S)
+    rf_window = settings.ANOMALY_RAPID_FIRE_WINDOW_S
+    rf_threshold = settings.ANOMALY_RAPID_FIRE_THRESHOLD
+    since = now - timedelta(seconds=rf_window)
     count = (
         await db.execute(
             select(func.count(MCPEvent.id)).where(
@@ -93,7 +85,7 @@ async def detect_anomalies(
             )
         )
     ).scalar_one() or 0
-    if count >= RAPID_FIRE_THRESHOLD and not await _recent_alert_exists(db, "R6", agent_id):
+    if count >= rf_threshold and not await _recent_alert_exists(db, "R6", agent_id):
         findings.append(
             AnomalyFinding(
                 rule_id="R6",
@@ -101,16 +93,18 @@ async def detect_anomalies(
                 severity="medium",
                 detail=(
                     f"Agent '{agent_id}' issued {count} MCP calls in the last "
-                    f"{RAPID_FIRE_WINDOW_S}s (threshold {RAPID_FIRE_THRESHOLD}). "
+                    f"{rf_window}s (threshold {rf_threshold}). "
                     "Possible runaway loop or automated abuse."
                 ),
                 evidence={"agent_id": agent_id, "count": count,
-                          "window_seconds": RAPID_FIRE_WINDOW_S},
+                          "window_seconds": rf_window},
             )
         )
 
     # R7: repeated blocked attempts.
-    since = now - timedelta(seconds=BLOCKED_WINDOW_S)
+    bl_window = settings.ANOMALY_BLOCKED_WINDOW_S
+    bl_threshold = settings.ANOMALY_BLOCKED_THRESHOLD
+    since = now - timedelta(seconds=bl_window)
     blocked = (
         await db.execute(
             select(func.count(MCPEvent.id)).where(
@@ -120,7 +114,7 @@ async def detect_anomalies(
             )
         )
     ).scalar_one() or 0
-    if blocked >= BLOCKED_THRESHOLD and not await _recent_alert_exists(db, "R7", agent_id):
+    if blocked >= bl_threshold and not await _recent_alert_exists(db, "R7", agent_id):
         findings.append(
             AnomalyFinding(
                 rule_id="R7",
@@ -128,16 +122,18 @@ async def detect_anomalies(
                 severity="high",
                 detail=(
                     f"Agent '{agent_id}' had {blocked} blocked messages in the last "
-                    f"{BLOCKED_WINDOW_S // 60} minutes. This pattern suggests an agent "
+                    f"{bl_window // 60} minutes. This pattern suggests an agent "
                     "probing policy boundaries or under prompt-injection control."
                 ),
                 evidence={"agent_id": agent_id, "blocked_count": blocked,
-                          "window_seconds": BLOCKED_WINDOW_S},
+                          "window_seconds": bl_window},
             )
         )
 
     # R8: distinct-tool enumeration.
-    since = now - timedelta(seconds=ENUM_WINDOW_S)
+    en_window = settings.ANOMALY_ENUM_WINDOW_S
+    en_threshold = settings.ANOMALY_ENUM_DISTINCT_TOOLS
+    since = now - timedelta(seconds=en_window)
     distinct_tools = (
         await db.execute(
             select(func.count(func.distinct(MCPEvent.tool_name))).where(
@@ -147,7 +143,7 @@ async def detect_anomalies(
             )
         )
     ).scalar_one() or 0
-    if distinct_tools >= ENUM_DISTINCT_TOOLS and not await _recent_alert_exists(
+    if distinct_tools >= en_threshold and not await _recent_alert_exists(
         db, "R8", agent_id
     ):
         findings.append(
@@ -157,11 +153,11 @@ async def detect_anomalies(
                 severity="medium",
                 detail=(
                     f"Agent '{agent_id}' called {distinct_tools} distinct tools within "
-                    f"{ENUM_WINDOW_S // 60} minutes — consistent with capability "
+                    f"{en_window // 60} minutes — consistent with capability "
                     "reconnaissance before an attack."
                 ),
                 evidence={"agent_id": agent_id, "distinct_tools": distinct_tools,
-                          "window_seconds": ENUM_WINDOW_S, "server_id": server_id},
+                          "window_seconds": en_window, "server_id": server_id},
             )
         )
 

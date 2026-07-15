@@ -114,6 +114,10 @@ class MCPTool(Base):
     # Detection: whether this tool definition looks poisoned/suspicious.
     is_suspicious: Mapped[bool] = mapped_column(Boolean, default=False)
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+    # SHA-256 over (name, description, input_schema) — the attestation baseline
+    # for drift detection. A changed fingerprint on re-registration means the
+    # server altered an advertised tool after approval (rug-pull signal).
+    fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     server: Mapped["MCPServer"] = relationship(back_populates="tools")

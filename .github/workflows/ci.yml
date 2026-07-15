@@ -24,11 +24,25 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run tests
+      - name: Run backend tests
         run: python -m pytest tests/ -q
         env:
           ENV: test
           JWT_SECRET: ci-secret-not-for-production
+      - name: Run gateway tests
+        working-directory: gateway
+        run: python -m pytest test_gateway.py -q
+
+  gateway-smoke:
+    name: Gateway import smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Syntax + import check (stdlib-only, no deps)
+        run: python -c "import ast, pathlib; ast.parse(pathlib.Path('gateway/mcpguard_gateway.py').read_text())"
 
   frontend:
     name: Frontend build (Next.js)
