@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     BASELINE_MIN_OBSERVATIONS: int = 5  # active buckets required before scoring
     BASELINE_Z_THRESHOLD: float = 3.0  # std deviations above mean to flag
 
+    # Tool-sequence baseline (R11): per-agent tool-transition (bigram) anomaly.
+    SEQUENCE_WINDOW_SECONDS: int = 604800  # history window to learn from (7 days)
+    SEQUENCE_MIN_TRANSITIONS: int = 20  # learned transitions required before scoring
+    SEQUENCE_RARE_PROB: float = 0.02  # P(dst|src) at/below this is "rare"
+
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"
