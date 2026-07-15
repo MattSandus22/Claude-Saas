@@ -195,6 +195,29 @@ class PolicyOut(BaseModel):
     updated_at: datetime
 
 
+# ---- API keys ----
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    scope: Literal["ingest"] = "ingest"
+
+
+class ApiKeyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    prefix: str
+    scope: str
+    revoked: bool
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class ApiKeyCreated(ApiKeyOut):
+    """Returned only at creation time; `key` is never retrievable again."""
+
+    key: str
+
+
 # ---- Dashboard ----
 class DashboardStats(BaseModel):
     total_servers: int

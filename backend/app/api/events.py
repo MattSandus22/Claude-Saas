@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import Principal, get_current_user, get_ingest_principal
 from app.db.session import get_db
 from app.models import MCPEvent, MCPServer, User
 from app.schemas import AlertOut, EventOut, InspectResult, MCPMessageIn
@@ -24,7 +24,7 @@ router = APIRouter(tags=["events"])
 async def inspect(
     body: MCPMessageIn,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    principal: Principal = Depends(get_ingest_principal),
 ):
     """Inspect a single MCP message: detect threats + apply policy."""
     server_id = body.server_id

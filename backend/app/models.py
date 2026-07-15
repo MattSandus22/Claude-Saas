@@ -177,6 +177,32 @@ class Policy(Base):
     )
 
 
+class ApiKey(Base):
+    """Programmatic access key for integrations (gateways, CI scanners).
+
+    Security: only a SHA-256 hash of the key is stored — the plaintext is shown
+    exactly once at creation. High-entropy random keys make unsalted SHA-256
+    safe here (no dictionary to attack), and hashing must be deterministic to
+    allow O(1) lookup by hash.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # First characters of the key, kept for display/identification only.
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    # What the key may do. MVP scopes: "ingest" (inspect/scan) is the only one.
+    scope: Mapped[str] = mapped_column(String(32), default="ingest")
+    created_by: Mapped[str] = mapped_column(String(255), default="system")
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 

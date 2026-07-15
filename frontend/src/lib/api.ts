@@ -169,6 +169,21 @@ export interface InspectResult {
   reasons: string[];
 }
 
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  scope: string;
+  revoked: boolean;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface ApiKeyCreated extends ApiKey {
+  /** Plaintext key — returned exactly once at creation, never again. */
+  key: string;
+}
+
 // ---- Endpoints ----
 export const api = {
   me: () => request<CurrentUser>("/auth/me"),
@@ -192,6 +207,14 @@ export const api = {
     request<Policy>("/policies", { method: "POST", body: JSON.stringify(body) }),
   deletePolicy: (id: string) => request<void>(`/policies/${id}`, { method: "DELETE" }),
   audit: () => request<Record<string, unknown>[]>("/audit"),
+  apiKeys: () => request<ApiKey[]>("/apikeys"),
+  createApiKey: (name: string) =>
+    request<ApiKeyCreated>("/apikeys", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  revokeApiKey: (id: string) =>
+    request<ApiKey>(`/apikeys/${id}/revoke`, { method: "POST" }),
 };
 
 export { ApiError };

@@ -96,6 +96,9 @@ guardrails:
 6. **Integration API** — Versioned REST endpoints for scanning, inspecting, and querying.
 7. **Auth + RBAC** — JWT auth with `admin` and `analyst` roles; admin‑gated mutations (users, policies, quarantine, audit).
 8. **Logging & alerting** — Alerts raised per finding; append‑only audit trail; a safety backstop auto‑quarantines servers on critical activity.
+9. **API keys for integrations** *(Phase 2)* — Admin‑managed, hash‑stored keys with a narrow `ingest` scope for agent gateways and CI scanners (`X-API-Key` on `/inspect` and `/servers/scan`).
+10. **Behavioral anomaly detection** *(Phase 2)* — Cross‑event rules catch rapid‑fire activity, policy‑probing agents, and tool‑enumeration recon (R6–R8), with in‑window alert deduplication.
+11. **Webhook alert notifications** *(Phase 2)* — High/critical alerts POST to a configured HTTPS webhook (SSRF‑guarded); without one configured, notifications run in logged simulation mode.
 
 ---
 
@@ -110,6 +113,13 @@ Rules live in `backend/app/detection/rules.py` — pure, dependency‑free, and 
 | **R3** | Data exfiltration | `~/.ssh/id_rsa`, `api_key`, `requestbin` | high |
 | **R4** | Destructive / high‑privilege op | `rm -rf`, `DROP TABLE`, `os.system` | critical |
 | **R5** | Suspicious tool schema | hidden `sidenote` / `instructions` params | medium |
+| **R6** | Rapid‑fire activity *(behavioral)* | ≥ 30 calls by one agent in 60 s | medium |
+| **R7** | Repeated blocked attempts *(behavioral)* | ≥ 3 blocked messages by one agent in 10 min | high |
+| **R8** | Tool enumeration *(behavioral)* | ≥ 10 distinct tools by one agent in 5 min | medium |
+
+Rules R1–R5 are pure, per‑message pattern rules (`detection/rules.py`); R6–R8
+look across recent event history per agent (`detection/anomaly.py`) and
+deduplicate so a burst produces one alert, not hundreds.
 
 **Scoring.** Each finding maps to a severity score (info 5 / low 15 / medium 35 / high 65 / critical 90). The engine takes the strongest finding as a floor and adds a diminishing contribution from the rest, capped at 100. The seeded **Baseline Guardrail** policy blocks at `max_threat_score = 65` (HIGH and above); a hard safety backstop blocks and quarantines at ≥ 90 even with no policy defined.
 
@@ -229,6 +239,14 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `POST` `PUT` `DELETE` | `/policies…` | admin | Manage policy‑as‑code. |
 | `GET` | `/dashboard/stats` | any | Aggregated posture for the dashboard. |
 | `GET` | `/audit` | admin | Append‑only audit trail. |
+| `POST` | `/apikeys` | admin | Create an integration API key (plaintext returned once). |
+| `GET` | `/apikeys` | admin | List keys (metadata only, never the secret). |
+| `POST` | `/apikeys/{id}/revoke` | admin | Revoke a key immediately. |
+
+**Integration auth:** `/inspect`, `/servers/scan`, and `POST /servers` also
+accept an `X-API-Key: mcpg_…` header instead of a bearer token, so gateways and
+CI pipelines can integrate without a user session. Keys are scope‑limited to
+ingestion — they can never read data or change configuration.
 
 ### Example: inspect a tool‑poisoning attempt
 
@@ -299,7 +317,7 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 30 passed — unit (detection, policy, sanitizer) + integration (full API)
+# 37 passed — unit (detection, policy, sanitizer) + integration (full API)
 ```
 
 The suite **simulates attacks and verifies defenses**:
@@ -309,6 +327,11 @@ The suite **simulates attacks and verifies defenses**:
 - RBAC → analyst blocked from admin routes; unauthenticated access rejected
 - sanitizer → deep nesting / oversized payloads rejected
 - discovery → `mcpServers` config parsed without double‑counting endpoints
+- API keys → revoked/invalid keys rejected; scope containment (a key cannot read data or reach admin routes)
+- anomaly detection → a probing agent triggers exactly one deduplicated R7 alert
+- webhook SSRF guard → non‑HTTPS and private/loopback destinations refused; unresolvable hosts fail closed
+
+CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
 Frontend build/typecheck:
 
@@ -330,11 +353,11 @@ Claude-Saas/
 │   │   ├── schemas.py            # Pydantic I/O (validation boundary)
 │   │   ├── api/                  # auth, servers, events, alerts, policies, dashboard
 │   │   ├── core/                 # config, security, sanitize, ratelimit
-│   │   ├── detection/rules.py    # threat‑detection engine (R1–R5)
-│   │   ├── services/             # discovery, policy, inspector, audit, bootstrap
+│   │   ├── detection/            # rules.py (R1–R5), anomaly.py (R6–R8)
+│   │   ├── services/             # discovery, policy, inspector, audit, apikeys, notify
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (30 tests)
+│   └── tests/                    # unit + integration (37 tests)
 └── frontend/
     └── src/
         ├── app/                  # login + (app) dashboard route group
@@ -344,22 +367,32 @@ Claude-Saas/
 
 ---
 
-## Phase 2 roadmap
+## Roadmap
 
-Prioritized next steps after this MVP:
+Shipped in Phase 2 ✅:
+
+- **Behavioral anomaly detection** — R6 rapid‑fire, R7 policy probing, R8 tool
+  enumeration, with per‑agent windows and alert deduplication.
+- **Integration API keys** — hash‑stored, admin‑managed, ingest‑scoped
+  (`X-API-Key`), with an admin UI at `/apikeys`.
+- **Webhook alert routing** — SSRF‑guarded HTTPS webhook for high/critical
+  alerts, simulation mode without config.
+- **CI pipeline** — backend pytest + frontend build on every push/PR.
+
+Prioritized next (Phase 3):
 
 1. **Live MCP proxy / gateway (inline enforcement).** Ship a sidecar that
    transparently proxies stdio/HTTP MCP traffic and calls `/inspect` in‑band, so
    MCPGuard *blocks* in real time instead of inspecting reported copies.
-2. **Behavioral anomaly detection.** Move beyond static patterns: per‑agent
-   baselines (tool‑call rates, data‑access volume, unusual sequences) with
-   statistical/ML scoring to catch novel attacks and slow exfiltration.
-3. **Signed tool‑definition attestation & drift detection.** Fingerprint approved
+2. **Signed tool‑definition attestation & drift detection.** Fingerprint approved
    tool definitions; alert when a server's advertised tools change (a live
    tool‑poisoning "rug pull").
-4. **Integrations & response.** SIEM/webhook/Slack/PagerDuty alert routing,
-   SSO/SCIM (WorkOS/Okta), and one‑click response actions (auto‑quarantine,
-   revoke agent credentials).
+3. **Statistical/ML baselines.** Extend R6–R8 with learned per‑agent baselines
+   (tool‑call rates, data‑access volume, unusual sequences) to catch novel
+   attacks and slow exfiltration; make thresholds configurable per org.
+4. **Integrations & response.** SIEM/Slack/PagerDuty routing, SSO/SCIM
+   (WorkOS/Okta), and one‑click response actions (auto‑quarantine, revoke agent
+   credentials).
 5. **Policy‑as‑code at scale.** Versioned policies with Git sync, dry‑run/simulate
    mode, OPA/Rego export, and per‑environment policy bundles.
 

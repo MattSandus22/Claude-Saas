@@ -16,8 +16,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.sanitize import PayloadTooComplex, sanitize
+from app.detection.anomaly import detect_anomalies
 from app.detection.rules import analyze_message, combine_score
 from app.models import Alert, AlertStatus, MCPEvent, MCPServer, Policy, ServerStatus, Severity
+from app.services.notify import notify_alerts
 from app.services.policy import evaluate_policies
 
 # If a message scores at/above this and no policy explicitly allows, we block it
@@ -119,6 +121,29 @@ async def inspect_message(
 
     await db.commit()
     await db.refresh(event)
+
+    # 5. Behavioral anomaly pass (needs the event committed so counts include it).
+    anomalies = await detect_anomalies(db, agent_id=agent_id, server_id=server_id)
+    for af in anomalies:
+        alert = Alert(
+            server_id=server_id,
+            event_id=event.id,
+            rule_id=af.rule_id,
+            title=af.title,
+            description=af.detail,
+            severity=Severity(af.severity),
+            status=AlertStatus.open,
+            evidence=af.evidence,
+        )
+        db.add(alert)
+        outcome.alerts.append(alert)
+        outcome.reasons.append(f"anomaly: {af.title}")
+    if anomalies:
+        await db.commit()
+
     for a in outcome.alerts:
         await db.refresh(a)
+
+    # 6. Notify (or simulate) for high/critical alerts. Never raises.
+    await notify_alerts(outcome.alerts)
     return outcome

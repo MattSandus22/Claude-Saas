@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import Principal, get_current_user, get_ingest_principal, require_admin
 from app.db.session import get_db
 from app.detection.rules import analyze_tool_definition, combine_score
 from app.models import MCPServer, MCPTool, ServerStatus, User
@@ -47,7 +47,7 @@ async def _analyze_and_attach_tools(server: MCPServer, tools) -> float:
 async def register_server(
     body: MCPServerCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    principal: Principal = Depends(get_ingest_principal),
 ):
     """Register a server (and optionally its tool definitions, which are scanned)."""
     server = MCPServer(
@@ -63,7 +63,7 @@ async def register_server(
     await db.commit()
     # Re-load with tools eagerly for the response.
     server = await _get_server_or_404(db, server.id)
-    await record(db, actor=user.email, action="server.register", target=server.id,
+    await record(db, actor=principal.actor, action="server.register", target=server.id,
                  detail={"risk": max_risk})
     return server
 
@@ -72,7 +72,7 @@ async def register_server(
 async def scan(
     body: ScanRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    principal: Principal = Depends(get_ingest_principal),
 ):
     """Static discovery scan.
 
@@ -112,7 +112,7 @@ async def scan(
         )
 
     await db.commit()
-    await record(db, actor=user.email, action="server.scan",
+    await record(db, actor=principal.actor, action="server.scan",
                  detail={"files": len(body.files), "discovered": len(discovered)})
     return ScanResult(
         discovered_servers=len(discovered),

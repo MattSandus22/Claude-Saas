@@ -12,6 +12,7 @@ import {
   FileLock2,
   LogOut,
   Radar,
+  KeyRound,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,7 @@ const NAV = [
   { href: "/events", label: "Events", icon: Activity },
   { href: "/alerts", label: "Alerts", icon: Bell },
   { href: "/policies", label: "Policies", icon: FileLock2 },
+  { href: "/apikeys", label: "API Keys", icon: KeyRound, adminOnly: true },
   { href: "/audit", label: "Audit Log", icon: ScrollText, adminOnly: true },
 ];
 

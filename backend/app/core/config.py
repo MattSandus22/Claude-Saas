@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     # CORS: comma-separated origins. Never use "*" together with credentials.
     CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000"])
 
+    # Alert webhook. Unset => simulation mode (alerts logged, not sent).
+    ALERT_WEBHOOK_URL: str | None = Field(default=None)
+    ALERT_WEBHOOK_MIN_SEVERITY: str = "high"
+    # Dev-only escape hatches for the SSRF guard; never enable in production.
+    ALERT_WEBHOOK_ALLOW_INSECURE: bool = False
+    ALERT_WEBHOOK_ALLOW_PRIVATE: bool = False
+
     # Bootstrap admin (seeded on first run if no users exist).
     FIRST_ADMIN_EMAIL: str = "admin@mcpguard.local"
     FIRST_ADMIN_PASSWORD: str = "ChangeMe!Admin123"
