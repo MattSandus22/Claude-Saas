@@ -102,6 +102,8 @@ guardrails:
 12. **Live gateway sidecar (inline enforcement)** *(Phase 3)* — A dependency‑free stdio proxy wraps a real MCP server and calls `/inspect` in band, so denied `tools/call` requests are *blocked before they execute* (fail‑closed by default). See [`gateway/`](gateway/).
 13. **Tool‑definition drift detection (R9)** *(Phase 3)* — Every approved tool definition is fingerprinted; re‑registration with a changed definition (the classic "rug pull") raises a high‑severity alert with before/after fingerprints.
 14. **Configurable anomaly thresholds** *(Phase 3)* — R6–R8 windows and thresholds are env‑tunable per deployment (`ANOMALY_*`).
+15. **Response actions — agent containment** *(Phase 4)* — One‑click "contain" on any agent adds it to a managed denylist policy, so every subsequent MCP message from it is denied until an admin releases it. Turns an R7 probing alert into an actual block.
+16. **Policy dry‑run / simulation** *(Phase 4)* — `POST /policies/simulate` runs the exact detection + policy pipeline with zero side effects, and can test a *candidate* policy before you save it. Surfaced as a simulator panel in the dashboard.
 
 ---
 
@@ -248,6 +250,10 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `POST` | `/apikeys` | admin | Create an integration API key (plaintext returned once). |
 | `GET` | `/apikeys` | admin | List keys (metadata only, never the secret). |
 | `POST` | `/apikeys/{id}/revoke` | admin | Revoke a key immediately. |
+| `POST` | `/policies/simulate` | any | **Dry-run** a message against detection + policy; no persistence. |
+| `GET` | `/agents/blocked` | any | List contained (blocked) agent ids. |
+| `POST` | `/agents/{id}/block` | admin | Contain an agent — deny all its future messages. |
+| `POST` | `/agents/{id}/unblock` | admin | Release a contained agent. |
 
 **Integration auth:** `/inspect`, `/servers/scan`, and `POST /servers` also
 accept an `X-API-Key: mcpg_…` header instead of a bearer token, so gateways and
@@ -328,7 +334,7 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 41 passed — unit (detection, policy, sanitizer, drift) + integration (full API)
+# 46 passed — unit (detection, policy, sanitizer, drift) + integration (full API)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest test_gateway.py -q
@@ -347,6 +353,8 @@ The suite **simulates attacks and verifies defenses**:
 - webhook SSRF guard → non‑HTTPS and private/loopback destinations refused; unresolvable hosts fail closed
 - drift / rug pull → re‑registering a tool with a changed definition raises a high‑severity R9 alert; first registration and identical re‑registration do not
 - gateway → denied `tools/call` answered to client and never forwarded to the server; fail‑closed when the control plane is unreachable
+- containment → blocking an agent denies its next message end‑to‑end (and only that agent's); unblock restores it; block/unblock is admin‑only
+- simulation → dry‑run returns the enforcement verdict with zero persisted events, and a candidate policy changes the verdict without being saved
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -371,10 +379,11 @@ Claude-Saas/
 │   │   ├── api/                  # auth, servers, events, alerts, policies, dashboard
 │   │   ├── core/                 # config, security, sanitize, ratelimit
 │   │   ├── detection/            # rules.py (R1–R5), anomaly.py (R6–R8)
-│   │   ├── services/             # discovery, policy, inspector, audit, apikeys, notify, drift
+│   │   ├── services/             # discovery, policy, inspector, audit, apikeys,
+│   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (41 tests)
+│   └── tests/                    # unit + integration (46 tests)
 ├── gateway/                      # inline enforcement sidecar (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   └── test_gateway.py           # 8 tests
@@ -409,17 +418,25 @@ Shipped in Phase 3 ✅:
 - **Configurable anomaly thresholds** — R6–R8 windows/thresholds via `ANOMALY_*`
   env settings.
 
-Prioritized next (Phase 4):
+Shipped in Phase 4 ✅:
+
+- **Response actions (agent containment)** — one‑click contain/release of an
+  agent via a managed denylist policy; enforced through the existing policy
+  path (no new bypass surface). Admin‑only and audited.
+- **Policy dry‑run / simulation** — `POST /policies/simulate` and a dashboard
+  simulator panel; test messages and candidate policies with no side effects.
+
+Prioritized next (Phase 5):
 
 1. **HTTP/SSE transport support in the gateway.** The current sidecar covers
    stdio; add a reverse‑proxy mode for HTTP/SSE MCP servers.
 2. **Statistical/ML baselines.** Extend R6–R8 with learned per‑agent baselines
    (tool‑call rates, data‑access volume, unusual sequences) to catch novel
    attacks and slow exfiltration.
-3. **Response actions & integrations.** SIEM/Slack/PagerDuty routing, SSO/SCIM
-   (WorkOS/Okta), and one‑click response (auto‑quarantine, revoke agent creds).
-4. **Policy‑as‑code at scale.** Versioned policies with Git sync, dry‑run/simulate
-   mode, OPA/Rego export, and per‑environment policy bundles.
+3. **More integrations.** SIEM/Slack/PagerDuty routing and SSO/SCIM
+   (WorkOS/Okta).
+4. **Policy‑as‑code at scale.** Versioned policies with Git sync, OPA/Rego
+   export, and per‑environment policy bundles.
 
 ---
 

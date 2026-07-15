@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_admin
 from app.db.session import get_db
 from app.models import Policy, User
-from app.schemas import PolicyCreate, PolicyOut
+from app.schemas import PolicyCreate, PolicyOut, SimulateRequest, SimulateResult
 from app.services.audit import record
+from app.services.simulate import simulate_message
 
 router = APIRouter(prefix="/policies", tags=["policies"])
 
@@ -45,6 +46,34 @@ async def list_policies(
 ):
     result = await db.execute(select(Policy).order_by(Policy.created_at.desc()))
     return list(result.scalars().all())
+
+
+@router.post("/simulate", response_model=SimulateResult)
+async def simulate(
+    body: SimulateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Dry-run a message against detection + policy without persisting anything.
+
+    Optionally supply `candidate_policies` to test a proposed policy before
+    saving it. Candidate rule docs are validated the same way as real ones.
+    """
+    candidates = None
+    if body.candidate_policies is not None:
+        for cp in body.candidate_policies:
+            _validate_rules(cp.rules)
+        candidates = [{"name": cp.name, "rules": cp.rules} for cp in body.candidate_policies]
+
+    result = await simulate_message(
+        db,
+        method=body.method,
+        tool_name=body.tool_name,
+        agent_id=body.agent_id,
+        payload=body.payload,
+        candidate_policies=candidates,
+    )
+    return SimulateResult(**result)
 
 
 @router.post("", response_model=PolicyOut, status_code=201)

@@ -218,6 +218,36 @@ class ApiKeyCreated(ApiKeyOut):
     key: str
 
 
+# ---- Response actions ----
+class BlockedAgents(BaseModel):
+    blocked_agents: list[str]
+
+
+# ---- Policy simulation (dry-run) ----
+class SimulateRequest(BaseModel):
+    """Evaluate a message against detection + policy WITHOUT persisting anything.
+
+    `candidate_policies` optionally overrides the stored policies, so an analyst
+    can test a policy edit before saving it. When omitted, current enabled
+    policies are used.
+    """
+
+    method: str = Field(max_length=128)
+    tool_name: str | None = Field(default=None, max_length=255)
+    agent_id: str | None = Field(default=None, max_length=255)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    candidate_policies: list[PolicyCreate] | None = None
+
+
+class SimulateResult(BaseModel):
+    threat_score: float
+    blocked: bool
+    allowed_by_policy: bool
+    reasons: list[str]
+    findings: list[dict[str, Any]]
+    used_candidate_policies: bool
+
+
 # ---- Dashboard ----
 class DashboardStats(BaseModel):
     total_servers: int

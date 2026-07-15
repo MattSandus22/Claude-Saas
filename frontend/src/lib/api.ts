@@ -169,6 +169,15 @@ export interface InspectResult {
   reasons: string[];
 }
 
+export interface SimulateResult {
+  threat_score: number;
+  blocked: boolean;
+  allowed_by_policy: boolean;
+  reasons: string[];
+  findings: { rule_id: string; title: string; severity: string; detail: string }[];
+  used_candidate_policies: boolean;
+}
+
 export interface ApiKey {
   id: string;
   name: string;
@@ -207,6 +216,22 @@ export const api = {
     request<Policy>("/policies", { method: "POST", body: JSON.stringify(body) }),
   deletePolicy: (id: string) => request<void>(`/policies/${id}`, { method: "DELETE" }),
   audit: () => request<Record<string, unknown>[]>("/audit"),
+  simulate: (body: Record<string, unknown>) =>
+    request<SimulateResult>("/policies/simulate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  blockedAgents: () => request<{ blocked_agents: string[] }>("/agents/blocked"),
+  blockAgent: (agentId: string) =>
+    request<{ blocked_agents: string[] }>(
+      `/agents/${encodeURIComponent(agentId)}/block`,
+      { method: "POST" }
+    ),
+  unblockAgent: (agentId: string) =>
+    request<{ blocked_agents: string[] }>(
+      `/agents/${encodeURIComponent(agentId)}/unblock`,
+      { method: "POST" }
+    ),
   apiKeys: () => request<ApiKey[]>("/apikeys"),
   createApiKey: (name: string) =>
     request<ApiKeyCreated>("/apikeys", {
