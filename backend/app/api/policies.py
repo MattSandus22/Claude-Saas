@@ -6,10 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import func
+
 from app.api.deps import get_current_user, require_admin
 from app.db.session import get_db
-from app.models import Policy, User
-from app.schemas import PolicyCreate, PolicyOut, SimulateRequest, SimulateResult
+from app.models import Policy, PolicyVersion, User
+from app.schemas import (
+    PolicyCreate,
+    PolicyOut,
+    PolicyVersionOut,
+    SimulateRequest,
+    SimulateResult,
+)
 from app.services.audit import record
 from app.services.simulate import simulate_message
 
@@ -26,6 +34,31 @@ _ALLOWED_RULE_KEYS = {
     "deny_agents",
     "require_agent_id",
 }
+
+
+async def _snapshot(
+    db: AsyncSession, policy: Policy, *, changed_by: str, note: str
+) -> PolicyVersion:
+    """Append an immutable version snapshot for a policy. Caller commits."""
+    current_max = (
+        await db.execute(
+            select(func.max(PolicyVersion.version)).where(
+                PolicyVersion.policy_id == policy.id
+            )
+        )
+    ).scalar_one()
+    snap = PolicyVersion(
+        policy_id=policy.id,
+        version=(current_max or 0) + 1,
+        name=policy.name,
+        description=policy.description,
+        enabled=policy.enabled,
+        rules=policy.rules,
+        changed_by=changed_by,
+        change_note=note[:255],
+    )
+    db.add(snap)
+    return snap
 
 
 def _validate_rules(rules: dict) -> None:
@@ -93,6 +126,8 @@ async def create_policy(
         rules=body.rules,
     )
     db.add(policy)
+    await db.flush()
+    await _snapshot(db, policy, changed_by=admin.email, note="created")
     await db.commit()
     await db.refresh(policy)
     await record(db, actor=admin.email, action="policy.create", target=policy.id,
@@ -115,9 +150,67 @@ async def update_policy(
     policy.description = body.description
     policy.enabled = body.enabled
     policy.rules = body.rules
+    await _snapshot(db, policy, changed_by=admin.email, note="updated")
     await db.commit()
     await db.refresh(policy)
     await record(db, actor=admin.email, action="policy.update", target=policy_id)
+    return policy
+
+
+@router.get("/{policy_id}/versions", response_model=list[PolicyVersionOut])
+async def list_versions(
+    policy_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Full immutable change history for a policy, newest first."""
+    if await db.get(Policy, policy_id) is None:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    result = await db.execute(
+        select(PolicyVersion)
+        .where(PolicyVersion.policy_id == policy_id)
+        .order_by(PolicyVersion.version.desc())
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/{policy_id}/rollback/{version}", response_model=PolicyOut)
+async def rollback(
+    policy_id: str,
+    version: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Restore a policy to a prior version.
+
+    The restore itself is recorded as a NEW version (history is append-only;
+    rolling back never rewrites it).
+    """
+    policy = await db.get(Policy, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    snap = (
+        await db.execute(
+            select(PolicyVersion).where(
+                PolicyVersion.policy_id == policy_id,
+                PolicyVersion.version == version,
+            )
+        )
+    ).scalar_one_or_none()
+    if snap is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    policy.name = snap.name
+    policy.description = snap.description
+    policy.enabled = snap.enabled
+    policy.rules = snap.rules
+    await _snapshot(
+        db, policy, changed_by=admin.email, note=f"rollback to v{version}"
+    )
+    await db.commit()
+    await db.refresh(policy)
+    await record(db, actor=admin.email, action="policy.rollback", target=policy_id,
+                 detail={"to_version": version})
     return policy
 
 

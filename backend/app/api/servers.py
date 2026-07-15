@@ -220,9 +220,23 @@ async def quarantine_server(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    """Quarantine a server (admin-only). Marks it untrusted/blocked."""
+    """Quarantine a server (admin-only). All its traffic is denied at /inspect."""
     server = await _get_server_or_404(db, server_id)
     server.status = ServerStatus.quarantined
     await db.commit()
     await record(db, actor=admin.email, action="server.quarantine", target=server_id)
+    return await _get_server_or_404(db, server_id)
+
+
+@router.post("/{server_id}/activate", response_model=MCPServerOut)
+async def activate_server(
+    server_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Release a server from quarantine / mark it active (admin-only)."""
+    server = await _get_server_or_404(db, server_id)
+    server.status = ServerStatus.active
+    await db.commit()
+    await record(db, actor=admin.email, action="server.activate", target=server_id)
     return await _get_server_or_404(db, server_id)

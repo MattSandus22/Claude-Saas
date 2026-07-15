@@ -181,6 +181,30 @@ class Policy(Base):
     )
 
 
+class PolicyVersion(Base):
+    """Immutable snapshot of a policy at each change.
+
+    Written on create, update, and rollback — never mutated or deleted — so the
+    full history of what was enforced (and by whom it was changed) is auditable
+    and any prior version can be restored.
+    """
+
+    __tablename__ = "policy_versions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    policy_id: Mapped[str] = mapped_column(
+        ForeignKey("policies.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    rules: Mapped[dict] = mapped_column(JSON, default=dict)
+    changed_by: Mapped[str] = mapped_column(String(255), default="system")
+    change_note: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class ApiKey(Base):
     """Programmatic access key for integrations (gateways, CI scanners).
 

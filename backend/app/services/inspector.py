@@ -49,6 +49,16 @@ async def inspect_message(
 ) -> InspectionOutcome:
     outcome = InspectionOutcome()
 
+    # 0. Quarantine gate: a quarantined server is untrusted — every message to
+    # or from it is denied outright, regardless of content or policy. Loaded
+    # first so the decision applies before any other evaluation.
+    server = await db.get(MCPServer, server_id) if server_id else None
+    quarantined = server is not None and server.status == ServerStatus.quarantined
+    if quarantined:
+        outcome.reasons.append(
+            f"server '{server.name}' is quarantined; all traffic denied"
+        )
+
     # 1. Sanitize (reject pathological payloads).
     try:
         clean_payload = sanitize(payload)
@@ -74,7 +84,11 @@ async def inspect_message(
     outcome.allowed_by_policy = decision.allowed
     outcome.reasons.extend(decision.reasons)
 
-    blocked = not decision.allowed or threat_score >= CRITICAL_BLOCK_THRESHOLD
+    blocked = (
+        quarantined
+        or not decision.allowed
+        or threat_score >= CRITICAL_BLOCK_THRESHOLD
+    )
     if threat_score >= CRITICAL_BLOCK_THRESHOLD and decision.allowed:
         outcome.reasons.append(
             f"blocked by safety backstop: threat score {threat_score} >= {CRITICAL_BLOCK_THRESHOLD}"
@@ -111,13 +125,11 @@ async def inspect_message(
         db.add(alert)
         outcome.alerts.append(alert)
 
-    # Bump server risk + last_seen if we know the server.
-    if server_id:
-        server = await db.get(MCPServer, server_id)
-        if server:
-            server.risk_score = max(server.risk_score, threat_score)
-            if threat_score >= CRITICAL_BLOCK_THRESHOLD:
-                server.status = ServerStatus.quarantined
+    # Bump server risk + last_seen if we know the server (loaded at step 0).
+    if server is not None:
+        server.risk_score = max(server.risk_score, threat_score)
+        if threat_score >= CRITICAL_BLOCK_THRESHOLD:
+            server.status = ServerStatus.quarantined
 
     await db.commit()
     await db.refresh(event)

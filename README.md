@@ -104,6 +104,9 @@ guardrails:
 14. **Configurable anomaly thresholds** *(Phase 3)* — R6–R8 windows and thresholds are env‑tunable per deployment (`ANOMALY_*`).
 15. **Response actions — agent containment** *(Phase 4)* — One‑click "contain" on any agent adds it to a managed denylist policy, so every subsequent MCP message from it is denied until an admin releases it. Turns an R7 probing alert into an actual block.
 16. **Policy dry‑run / simulation** *(Phase 4)* — `POST /policies/simulate` runs the exact detection + policy pipeline with zero side effects, and can test a *candidate* policy before you save it. Surfaced as a simulator panel in the dashboard.
+17. **Quarantine enforcement** *(Phase 5)* — A quarantined server's traffic is denied at `/inspect` outright (not just flagged in the UI). Admins release with `POST /servers/{id}/activate`.
+18. **HTTP/SSE reverse‑proxy gateway** *(Phase 5)* — A second gateway mode proxies `url`‑style MCP servers, enforcing the same inline block on `tools/call` (batches are deny‑safe) and streaming SSE responses through. See [`gateway/`](gateway/).
+19. **Policy versioning + rollback** *(Phase 5)* — Every policy create/update/rollback writes an immutable version snapshot; `GET /policies/{id}/versions` shows the history and `POST /policies/{id}/rollback/{version}` restores a prior version as a new version (history is never rewritten).
 
 ---
 
@@ -238,7 +241,8 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `POST` | `/servers/scan` | any | **Static discovery scan** of submitted file contents. |
 | `GET` | `/servers` | any | List servers (with tools), risk‑ranked. |
 | `GET` | `/servers/{id}` | any | Server detail. |
-| `POST` | `/servers/{id}/quarantine` | admin | Quarantine a server. |
+| `POST` | `/servers/{id}/quarantine` | admin | Quarantine a server (its traffic is then denied at `/inspect`). |
+| `POST` | `/servers/{id}/activate` | admin | Release a server from quarantine. |
 | `POST` | `/inspect` | any | **Inspect an MCP message**: detect + apply policy, return decision. |
 | `GET` | `/events` | any | List monitored events (filter by server/blocked). |
 | `GET` | `/alerts` | any | List alerts (filter by status/severity). |
@@ -254,6 +258,8 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `GET` | `/agents/blocked` | any | List contained (blocked) agent ids. |
 | `POST` | `/agents/{id}/block` | admin | Contain an agent — deny all its future messages. |
 | `POST` | `/agents/{id}/unblock` | admin | Release a contained agent. |
+| `GET` | `/policies/{id}/versions` | any | Immutable version history of a policy. |
+| `POST` | `/policies/{id}/rollback/{version}` | admin | Restore a policy to a prior version (as a new version). |
 
 **Integration auth:** `/inspect`, `/servers/scan`, and `POST /servers` also
 accept an `X-API-Key: mcpg_…` header instead of a bearer token, so gateways and
@@ -334,11 +340,13 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 46 passed — unit (detection, policy, sanitizer, drift) + integration (full API)
+# 50 passed — unit (detection, policy, sanitizer, drift) + integration (full API,
+#             incl. quarantine enforcement + policy versioning/rollback)
 
 # Gateway sidecar (dependency-free, from repo root):
-cd gateway && python -m pytest test_gateway.py -q
-# 8 passed — inline enforcement: block/forward pump, fail-open/closed, drift harvest
+cd gateway && python -m pytest -q
+# 13 passed — stdio + HTTP inline enforcement: block/forward, fail-closed,
+#             deny-safe batches, SSE proxy round trip, drift harvest
 ```
 
 The suite **simulates attacks and verifies defenses**:
@@ -355,6 +363,9 @@ The suite **simulates attacks and verifies defenses**:
 - gateway → denied `tools/call` answered to client and never forwarded to the server; fail‑closed when the control plane is unreachable
 - containment → blocking an agent denies its next message end‑to‑end (and only that agent's); unblock restores it; block/unblock is admin‑only
 - simulation → dry‑run returns the enforcement verdict with zero persisted events, and a candidate policy changes the verdict without being saved
+- quarantine → a quarantined server's benign traffic is denied at `/inspect`; releasing it restores traffic; activate is admin‑only
+- HTTP gateway → blocked `tools/call` answered by the proxy and never reaches upstream; a batch with any blocked call is rejected whole; `tools/list` responses are harvested
+- policy versioning → create/update/rollback append immutable versions; rollback restores prior rules as a new version without rewriting history
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -383,10 +394,11 @@ Claude-Saas/
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (46 tests)
-├── gateway/                      # inline enforcement sidecar (stdlib-only)
+│   └── tests/                    # unit + integration (50 tests)
+├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
-│   └── test_gateway.py           # 8 tests
+│   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
+│   └── test_gateway.py, test_http_gateway.py  # 13 tests
 └── frontend/
     └── src/
         ├── app/                  # login + (app) dashboard route group
@@ -426,16 +438,23 @@ Shipped in Phase 4 ✅:
 - **Policy dry‑run / simulation** — `POST /policies/simulate` and a dashboard
   simulator panel; test messages and candidate policies with no side effects.
 
-Prioritized next (Phase 5):
+Shipped in Phase 5 ✅:
 
-1. **HTTP/SSE transport support in the gateway.** The current sidecar covers
-   stdio; add a reverse‑proxy mode for HTTP/SSE MCP servers.
-2. **Statistical/ML baselines.** Extend R6–R8 with learned per‑agent baselines
+- **Quarantine enforcement** — a quarantined server's traffic is denied at
+  `/inspect`, with an admin `activate` release path.
+- **HTTP/SSE reverse‑proxy gateway** — a second gateway mode for `url`‑style MCP
+  servers, with deny‑safe batch handling and SSE streaming.
+- **Policy versioning + rollback** — immutable per‑change snapshots, history
+  listing, and rollback‑as‑new‑version.
+
+Prioritized next (Phase 6):
+
+1. **Statistical/ML baselines.** Extend R6–R8 with learned per‑agent baselines
    (tool‑call rates, data‑access volume, unusual sequences) to catch novel
    attacks and slow exfiltration.
-3. **More integrations.** SIEM/Slack/PagerDuty routing and SSO/SCIM
+2. **More integrations.** SIEM/Slack/PagerDuty routing and SSO/SCIM
    (WorkOS/Okta).
-4. **Policy‑as‑code at scale.** Versioned policies with Git sync, OPA/Rego
+3. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego
    export, and per‑environment policy bundles.
 
 ---

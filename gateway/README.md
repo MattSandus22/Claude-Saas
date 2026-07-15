@@ -81,12 +81,36 @@ at the gateway and move the real command after `--`:
 The client talks to the gateway exactly as it would to the real server; the
 gateway is transparent except that denied calls come back as errors.
 
+## HTTP/SSE mode (`mcpguard_http_gateway.py`)
+
+For `url`-style MCP servers, run the reverse-proxy variant instead. It listens on
+a local address, forwards to the upstream MCP server URL, and enforces the same
+inline block on `tools/call` — plus SSE streaming and deny-safe batch handling
+(a JSON-RPC batch containing any blocked call is rejected whole).
+
+```bash
+MCPGUARD_URL=https://mcpguard.internal/api/v1 \
+MCPGUARD_API_KEY=mcpg_xxxxxxxx \
+MCPGUARD_SERVER_NAME=remote-tools \
+MCPGUARD_UPSTREAM_URL=https://tools.example.com \
+MCPGUARD_LISTEN=127.0.0.1:8899 \
+python mcpguard_http_gateway.py
+```
+
+Point the MCP client at `http://127.0.0.1:8899` instead of the upstream URL.
+Extra env vars: `MCPGUARD_UPSTREAM_URL` (required, the real server), `MCPGUARD_LISTEN`
+(default `127.0.0.1:8899`). All the shared vars above (`MCPGUARD_URL`, `_API_KEY`,
+`_FAIL_OPEN`, …) apply identically.
+
 ## Tests
 
 ```bash
-python -m pytest test_gateway.py -q
+python -m pytest -q
 ```
 
-Covers the enforcement decision (fail-open/closed, block parsing) and the pump:
-a denied `tools/call` is answered to the client and never reaches the server;
-benign traffic passes through; `tools/list` responses are harvested for drift.
+Covers both modes. Stdio: the enforcement decision (fail-open/closed, block
+parsing) and the pump — a denied `tools/call` is answered to the client and never
+reaches the server; benign traffic passes; `tools/list` is harvested for drift.
+HTTP: single + batch `enforce_jsonrpc`, plus an end-to-end proxy round trip
+against a fake upstream (blocked call never reaches upstream, allowed call passes,
+`tools/list` harvested).

@@ -218,6 +218,20 @@ class ApiKeyCreated(ApiKeyOut):
     key: str
 
 
+class PolicyVersionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    policy_id: str
+    version: int
+    name: str
+    description: str
+    enabled: bool
+    rules: dict[str, Any]
+    changed_by: str
+    change_note: str
+    created_at: datetime
+
+
 # ---- Response actions ----
 class BlockedAgents(BaseModel):
     blocked_agents: list[str]
