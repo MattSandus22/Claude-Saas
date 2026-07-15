@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin
 from app.db.session import get_db
+from app.detection.baseline import compute_agent_baseline
 from app.models import User
 from app.schemas import BlockedAgents
 from app.services.audit import record
@@ -28,6 +29,17 @@ async def get_blocked(
     user: User = Depends(get_current_user),
 ):
     return BlockedAgents(blocked_agents=await list_blocked_agents(db))
+
+
+@router.get("/{agent_id}/baseline")
+async def get_baseline(
+    agent_id: str = _AGENT_ID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """The agent's learned volume baseline (R10): mean/stddev, current bucket,
+    and the current z-score. Useful for tuning and for explaining an alert."""
+    return await compute_agent_baseline(db, agent_id)
 
 
 @router.post("/{agent_id}/block", response_model=BlockedAgents)

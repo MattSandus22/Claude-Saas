@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.sanitize import PayloadTooComplex, sanitize
 from app.detection.anomaly import detect_anomalies
+from app.detection.baseline import detect_statistical_anomaly
 from app.detection.rules import analyze_message, combine_score
 from app.models import Alert, AlertStatus, MCPEvent, MCPServer, Policy, ServerStatus, Severity
 from app.services.notify import notify_alerts
@@ -135,7 +136,9 @@ async def inspect_message(
     await db.refresh(event)
 
     # 5. Behavioral anomaly pass (needs the event committed so counts include it).
+    #    Fixed-threshold rules (R6-R8) plus the per-agent statistical baseline (R10).
     anomalies = await detect_anomalies(db, agent_id=agent_id, server_id=server_id)
+    anomalies += await detect_statistical_anomaly(db, agent_id=agent_id)
     for af in anomalies:
         alert = Alert(
             server_id=server_id,

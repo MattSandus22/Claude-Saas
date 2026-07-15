@@ -107,6 +107,7 @@ guardrails:
 17. **Quarantine enforcement** *(Phase 5)* — A quarantined server's traffic is denied at `/inspect` outright (not just flagged in the UI). Admins release with `POST /servers/{id}/activate`.
 18. **HTTP/SSE reverse‑proxy gateway** *(Phase 5)* — A second gateway mode proxies `url`‑style MCP servers, enforcing the same inline block on `tools/call` (batches are deny‑safe) and streaming SSE responses through. See [`gateway/`](gateway/).
 19. **Policy versioning + rollback** *(Phase 5)* — Every policy create/update/rollback writes an immutable version snapshot; `GET /policies/{id}/versions` shows the history and `POST /policies/{id}/rollback/{version}` restores a prior version as a new version (history is never rewritten).
+20. **Statistical anomaly baselines (R10)** *(Phase 6)* — Each agent's normal call volume is learned from its own history; a current window exceeding the agent's mean by > 3σ (z‑score) raises a high‑severity alert, catching novel spikes that a fixed global threshold misses. `GET /agents/{id}/baseline` exposes the live stats; thresholds are env‑tunable (`BASELINE_*`).
 
 ---
 
@@ -125,12 +126,15 @@ Rules live in `backend/app/detection/rules.py` — pure, dependency‑free, and 
 | **R7** | Repeated blocked attempts *(behavioral)* | ≥ 3 blocked messages by one agent in 10 min | high |
 | **R8** | Tool enumeration *(behavioral)* | ≥ 10 distinct tools by one agent in 5 min | medium |
 | **R9** | Tool‑definition drift / rug pull | an approved tool's definition changes on re‑registration | high |
+| **R10** | Statistical volume anomaly *(per‑agent baseline)* | current‑window volume is > 3σ above the agent's own learned mean | high |
 
 Rules R1–R5 are pure, per‑message pattern rules (`detection/rules.py`); R6–R8
 look across recent event history per agent (`detection/anomaly.py`, thresholds
 env‑configurable) and deduplicate so a burst produces one alert, not hundreds;
 R9 (`services/drift.py`) fingerprints tool definitions and fires when a server
-silently changes one after approval.
+silently changes one after approval; R10 (`detection/baseline.py`) learns each
+agent's *own* normal call volume and flags deviations by z‑score, catching
+spikes a fixed global threshold would miss.
 
 **Scoring.** Each finding maps to a severity score (info 5 / low 15 / medium 35 / high 65 / critical 90). The engine takes the strongest finding as a floor and adds a diminishing contribution from the rest, capped at 100. The seeded **Baseline Guardrail** policy blocks at `max_threat_score = 65` (HIGH and above); a hard safety backstop blocks and quarantines at ≥ 90 even with no policy defined.
 
@@ -258,6 +262,7 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `GET` | `/agents/blocked` | any | List contained (blocked) agent ids. |
 | `POST` | `/agents/{id}/block` | admin | Contain an agent — deny all its future messages. |
 | `POST` | `/agents/{id}/unblock` | admin | Release a contained agent. |
+| `GET` | `/agents/{id}/baseline` | any | Live per‑agent volume baseline (mean/stddev/current z‑score). |
 | `GET` | `/policies/{id}/versions` | any | Immutable version history of a policy. |
 | `POST` | `/policies/{id}/rollback/{version}` | admin | Restore a policy to a prior version (as a new version). |
 
@@ -340,8 +345,8 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 50 passed — unit (detection, policy, sanitizer, drift) + integration (full API,
-#             incl. quarantine enforcement + policy versioning/rollback)
+# 56 passed — unit (detection, policy, sanitizer, drift, statistical baseline)
+#             + integration (full API, quarantine, versioning/rollback, R10)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest -q
@@ -366,6 +371,7 @@ The suite **simulates attacks and verifies defenses**:
 - quarantine → a quarantined server's benign traffic is denied at `/inspect`; releasing it restores traffic; activate is admin‑only
 - HTTP gateway → blocked `tools/call` answered by the proxy and never reaches upstream; a batch with any blocked call is rejected whole; `tools/list` responses are harvested
 - policy versioning → create/update/rollback append immutable versions; rollback restores prior rules as a new version without rewriting history
+- statistical baseline (R10) → a spike > 3σ above an agent's learned mean raises one R10 alert; an agent still learning (too few observations) and a consistently busy agent are not flagged
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -389,12 +395,12 @@ Claude-Saas/
 │   │   ├── schemas.py            # Pydantic I/O (validation boundary)
 │   │   ├── api/                  # auth, servers, events, alerts, policies, dashboard
 │   │   ├── core/                 # config, security, sanitize, ratelimit
-│   │   ├── detection/            # rules.py (R1–R5), anomaly.py (R6–R8)
+│   │   ├── detection/            # rules.py (R1–R5), anomaly.py (R6–R8), baseline.py (R10)
 │   │   ├── services/             # discovery, policy, inspector, audit, apikeys,
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (50 tests)
+│   └── tests/                    # unit + integration (56 tests)
 ├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
@@ -447,11 +453,16 @@ Shipped in Phase 5 ✅:
 - **Policy versioning + rollback** — immutable per‑change snapshots, history
   listing, and rollback‑as‑new‑version.
 
-Prioritized next (Phase 6):
+Shipped in Phase 6 ✅:
 
-1. **Statistical/ML baselines.** Extend R6–R8 with learned per‑agent baselines
-   (tool‑call rates, data‑access volume, unusual sequences) to catch novel
-   attacks and slow exfiltration.
+- **Statistical anomaly baselines (R10)** — per‑agent learned volume baseline
+  with z‑score scoring; catches novel spikes relative to an agent's own normal,
+  with a learning window so new agents aren't falsely flagged.
+
+Prioritized next (Phase 7):
+
+1. **Richer baselines.** Extend R10 beyond call volume to data‑access volume and
+   unusual tool‑sequence detection, for slow‑exfiltration coverage.
 2. **More integrations.** SIEM/Slack/PagerDuty routing and SSO/SCIM
    (WorkOS/Okta).
 3. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego

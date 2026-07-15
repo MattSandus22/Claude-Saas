@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     ANOMALY_ENUM_DISTINCT_TOOLS: int = 10
     ANOMALY_DEDUPE_WINDOW_S: int = 600
 
+    # Statistical baseline (R10): per-agent learned volume anomaly.
+    BASELINE_BUCKET_SECONDS: int = 3600  # size of each activity bucket (1h)
+    BASELINE_WINDOW_BUCKETS: int = 168  # history window (7 days of hours)
+    BASELINE_MIN_OBSERVATIONS: int = 5  # active buckets required before scoring
+    BASELINE_Z_THRESHOLD: float = 3.0  # std deviations above mean to flag
+
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"
