@@ -137,6 +137,9 @@ class MCPEvent(Base):
     direction: Mapped[str] = mapped_column(String(16), default="request")  # request|response
     # Sanitized payload (never trusted as executable).
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Serialized payload size in bytes, recorded at write time so the data-volume
+    # baseline (R12) can SUM it per agent without re-scanning payloads.
+    payload_bytes: Mapped[int] = mapped_column(Integer, default=0)
     # Populated by detection engine.
     threat_score: Mapped[float] = mapped_column(Float, default=0.0)
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)

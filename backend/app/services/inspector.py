@@ -12,12 +12,15 @@ Returned as a structured result so the API and tests can assert on it.
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.sanitize import PayloadTooComplex, sanitize
 from app.detection.anomaly import detect_anomalies
 from app.detection.baseline import detect_statistical_anomaly
+from app.detection.datavolume import detect_data_volume_anomaly
 from app.detection.sequence import detect_sequence_anomaly
 from app.detection.rules import analyze_message, combine_score
 from app.models import Alert, AlertStatus, MCPEvent, MCPServer, Policy, ServerStatus, Severity
@@ -97,7 +100,12 @@ async def inspect_message(
         )
     outcome.blocked = blocked
 
-    # 4. Persist event.
+    # 4. Persist event. Record the serialized payload size so the data-volume
+    # baseline (R12) can sum it cheaply without re-reading payloads later.
+    try:
+        payload_bytes = len(json.dumps(clean_payload, default=str))
+    except (TypeError, ValueError):
+        payload_bytes = 0
     event = MCPEvent(
         server_id=server_id,
         method=method,
@@ -105,6 +113,7 @@ async def inspect_message(
         agent_id=agent_id,
         direction=direction,
         payload=clean_payload,
+        payload_bytes=payload_bytes,
         threat_score=threat_score,
         blocked=blocked,
     )
@@ -142,6 +151,7 @@ async def inspect_message(
     anomalies = await detect_anomalies(db, agent_id=agent_id, server_id=server_id)
     anomalies += await detect_statistical_anomaly(db, agent_id=agent_id)
     anomalies += await detect_sequence_anomaly(db, agent_id=agent_id)
+    anomalies += await detect_data_volume_anomaly(db, agent_id=agent_id)
     for af in anomalies:
         alert = Alert(
             server_id=server_id,

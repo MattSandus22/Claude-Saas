@@ -109,6 +109,7 @@ guardrails:
 19. **Policy versioning + rollback** *(Phase 5)* — Every policy create/update/rollback writes an immutable version snapshot; `GET /policies/{id}/versions` shows the history and `POST /policies/{id}/rollback/{version}` restores a prior version as a new version (history is never rewritten).
 20. **Statistical anomaly baselines (R10)** *(Phase 6)* — Each agent's normal call volume is learned from its own history; a current window exceeding the agent's mean by > 3σ (z‑score) raises a high‑severity alert, catching novel spikes that a fixed global threshold misses. `GET /agents/{id}/baseline` exposes the live stats; thresholds are env‑tunable (`BASELINE_*`).
 21. **Tool‑sequence anomaly detection (R11)** *(Phase 7)* — Each agent's tool‑call *transitions* are modeled as a per‑agent Markov chain; a rare or never‑before‑seen transition (e.g. `read_file` → `http_post`) flags a slow‑exfiltration pattern even when every call is individually allowed and the volume is normal. A transition into a sensitive sink (network/write/exec) is scored high; other rare transitions medium. Env‑tunable (`SEQUENCE_*`).
+22. **Data‑access volume baseline (R12)** *(Phase 8)* — Each agent's normal *data volume* (summed payload bytes per window) is learned; a window that spikes > 3σ above the agent's own byte baseline raises a high‑severity alert, catching the patient exfiltrator who keeps the call count flat but drips large reads. Payload size is recorded at write time (cheap SQL `SUM`, no re‑scan); an absolute byte floor suppresses tiny‑volume noise. `GET /agents/{id}/baseline` now returns both the call‑volume (R10) and data‑volume (R12) views; env‑tunable (`DATAVOL_*`).
 
 ---
 
@@ -129,6 +130,7 @@ Rules live in `backend/app/detection/rules.py` — pure, dependency‑free, and 
 | **R9** | Tool‑definition drift / rug pull | an approved tool's definition changes on re‑registration | high |
 | **R10** | Statistical volume anomaly *(per‑agent baseline)* | current‑window volume is > 3σ above the agent's own learned mean | high |
 | **R11** | Tool‑sequence anomaly *(per‑agent transition baseline)* | a rare/never‑seen tool transition for the agent (e.g. `read_file` → `http_post`) | high (sink) / medium |
+| **R12** | Data‑volume anomaly *(per‑agent byte baseline)* | current‑window payload bytes > 3σ above the agent's own learned byte volume | high |
 
 Rules R1–R5 are pure, per‑message pattern rules (`detection/rules.py`); R6–R8
 look across recent event history per agent (`detection/anomaly.py`, thresholds
@@ -138,7 +140,11 @@ silently changes one after approval; R10 (`detection/baseline.py`) learns each
 agent's *own* normal call volume and flags deviations by z‑score, catching
 spikes a fixed global threshold would miss; R11 (`detection/sequence.py`) learns
 each agent's tool‑transition graph and flags an out‑of‑pattern sequence — the
-slow‑exfiltration shape where every call is allowed but the *order* is novel.
+slow‑exfiltration shape where every call is allowed but the *order* is novel;
+R12 (`detection/datavolume.py`) learns each agent's normal *data volume* (payload
+bytes) and flags a spike even when the call count and sequence look normal — the
+exfiltrator who drips a few large reads. R10–R12 are the per‑agent learned
+baselines: volume, sequence, and data.
 
 **Scoring.** Each finding maps to a severity score (info 5 / low 15 / medium 35 / high 65 / critical 90). The engine takes the strongest finding as a floor and adds a diminishing contribution from the rest, capped at 100. The seeded **Baseline Guardrail** policy blocks at `max_threat_score = 65` (HIGH and above); a hard safety backstop blocks and quarantines at ≥ 90 even with no policy defined.
 
@@ -349,9 +355,9 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 64 passed — unit (detection, policy, sanitizer, drift, statistical baseline,
-#             tool-sequence baseline) + integration (full API, quarantine,
-#             versioning/rollback, R10, R11)
+# 70 passed — unit (detection, policy, sanitizer, drift, statistical/sequence/
+#             data-volume baselines) + integration (full API, quarantine,
+#             versioning/rollback, R10, R11, R12)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest -q
@@ -378,6 +384,7 @@ The suite **simulates attacks and verifies defenses**:
 - policy versioning → create/update/rollback append immutable versions; rollback restores prior rules as a new version without rewriting history
 - statistical baseline (R10) → a spike > 3σ above an agent's learned mean raises one R10 alert; an agent still learning (too few observations) and a consistently busy agent are not flagged
 - sequence baseline (R11) → an agent that always chained `read_file`→`summarize` doing `read_file`→`http_post` raises a high‑severity R11 alert; a rare benign transition is medium; a still‑learning agent and an agent repeating its normal transition are not flagged
+- data‑volume baseline (R12) → a byte‑volume spike far above an agent's own baseline raises one R12 alert; a still‑learning agent, a consistently high‑volume agent, and a spike below the absolute byte floor are all not flagged
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -401,12 +408,12 @@ Claude-Saas/
 │   │   ├── schemas.py            # Pydantic I/O (validation boundary)
 │   │   ├── api/                  # auth, servers, events, alerts, policies, dashboard
 │   │   ├── core/                 # config, security, sanitize, ratelimit
-│   │   ├── detection/            # rules(R1–R5), anomaly(R6–R8), baseline(R10), sequence(R11)
+│   │   ├── detection/            # rules(R1-R5), anomaly(R6-R8), baseline(R10), sequence(R11), datavolume(R12)
 │   │   ├── services/             # discovery, policy, inspector, audit, apikeys,
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (64 tests)
+│   └── tests/                    # unit + integration (70 tests)
 ├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
@@ -471,10 +478,17 @@ Shipped in Phase 7 ✅:
   baseline; flags rare/never‑seen tool sequences (slow‑exfiltration shape), with
   sensitive‑sink transitions scored higher and a learning window before scoring.
 
-Prioritized next (Phase 8):
+Shipped in Phase 8 ✅:
 
-1. **Richer baselines still.** Extend the per‑agent model to data‑access volume
-   (bytes/records read) and cross‑server correlation.
+- **Data‑access volume baseline (R12)** — per‑agent byte‑volume baseline;
+  catches the patient exfiltrator who keeps the call count flat but drips large
+  reads. Payload size recorded at write time (cheap SQL `SUM`), with an absolute
+  byte floor to suppress tiny‑volume noise.
+
+Prioritized next (Phase 9):
+
+1. **Cross‑server / cross‑agent correlation.** Detect a campaign spread across
+   several agents or servers that each stay individually under threshold.
 2. **More integrations.** SIEM/Slack/PagerDuty routing and SSO/SCIM
    (WorkOS/Okta).
 3. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego

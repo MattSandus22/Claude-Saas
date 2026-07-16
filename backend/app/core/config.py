@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     SEQUENCE_MIN_TRANSITIONS: int = 20  # learned transitions required before scoring
     SEQUENCE_RARE_PROB: float = 0.02  # P(dst|src) at/below this is "rare"
 
+    # Data-volume baseline (R12): per-agent payload-byte volume anomaly.
+    DATAVOL_BUCKET_SECONDS: int = 3600  # size of each volume bucket (1h)
+    DATAVOL_WINDOW_BUCKETS: int = 168  # history window (7 days of hours)
+    DATAVOL_MIN_OBSERVATIONS: int = 5  # active buckets required before scoring
+    DATAVOL_Z_THRESHOLD: float = 3.0  # std deviations above mean to flag
+    DATAVOL_MIN_BYTES: int = 10_000  # absolute floor to suppress tiny-volume noise
+
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"
