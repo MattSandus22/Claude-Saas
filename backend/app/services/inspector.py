@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.sanitize import PayloadTooComplex, sanitize
 from app.detection.anomaly import detect_anomalies
 from app.detection.baseline import detect_statistical_anomaly
+from app.detection.correlation import detect_correlation_anomaly
 from app.detection.datavolume import detect_data_volume_anomaly
 from app.detection.sequence import detect_sequence_anomaly
 from app.detection.rules import analyze_message, combine_score
@@ -152,6 +153,7 @@ async def inspect_message(
     anomalies += await detect_statistical_anomaly(db, agent_id=agent_id)
     anomalies += await detect_sequence_anomaly(db, agent_id=agent_id)
     anomalies += await detect_data_volume_anomaly(db, agent_id=agent_id)
+    anomalies += await detect_correlation_anomaly(db, server_id=server_id)
     for af in anomalies:
         alert = Alert(
             server_id=server_id,

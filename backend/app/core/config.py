@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     DATAVOL_Z_THRESHOLD: float = 3.0  # std deviations above mean to flag
     DATAVOL_MIN_BYTES: int = 10_000  # absolute floor to suppress tiny-volume noise
 
+    # Cross-agent correlation (R13): coordinated multi-agent campaign detection.
+    CORRELATION_WINDOW_SECONDS: int = 300  # campaign observation window (5 min)
+    CORRELATION_MIN_AGENTS: int = 8  # distinct agents on one server -> fan-in surge
+    CORRELATION_MIN_BLOCKED_AGENTS: int = 3  # distinct blocked agents -> coordinated burst
+
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"
