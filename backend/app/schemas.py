@@ -169,10 +169,34 @@ class AlertOut(BaseModel):
     severity: str
     status: str
     evidence: dict[str, Any]
+    incident_id: str | None = None
     created_at: datetime
 
 
 class AlertUpdate(BaseModel):
+    status: Literal["open", "acknowledged", "resolved"]
+
+
+# ---- Incidents (case management) ----
+class IncidentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    title: str
+    server_id: str | None
+    agent_id: str | None
+    severity: str
+    status: str
+    alert_count: int
+    rule_ids: list[str]
+    first_seen: datetime
+    last_seen: datetime
+
+
+class IncidentDetail(IncidentOut):
+    alerts: list[AlertOut] = []
+
+
+class IncidentUpdate(BaseModel):
     status: Literal["open", "acknowledged", "resolved"]
 
 
@@ -271,6 +295,7 @@ class DashboardStats(BaseModel):
     total_events: int
     blocked_events: int
     open_alerts: int
+    open_incidents: int = 0
     alerts_by_severity: dict[str, int]
     events_last_7d: list[dict[str, Any]]
     top_risky_servers: list[dict[str, Any]]

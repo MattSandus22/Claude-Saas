@@ -16,7 +16,17 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import agents, alerts, apikeys, auth, dashboard, events, policies, servers
+from app.api import (
+    agents,
+    alerts,
+    apikeys,
+    auth,
+    dashboard,
+    events,
+    incidents,
+    policies,
+    servers,
+)
 from app.core.config import settings
 from app.core.ratelimit import RateLimitMiddleware
 from app.db.session import AsyncSessionLocal, init_db
@@ -94,3 +104,4 @@ app.include_router(policies.router, prefix=_p)
 app.include_router(dashboard.router, prefix=_p)
 app.include_router(apikeys.router, prefix=_p)
 app.include_router(agents.router, prefix=_p)
+app.include_router(incidents.router, prefix=_p)

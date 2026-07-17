@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     CORRELATION_MIN_AGENTS: int = 8  # distinct agents on one server -> fan-in surge
     CORRELATION_MIN_BLOCKED_AGENTS: int = 3  # distinct blocked agents -> coordinated burst
 
+    # Incident case management: window in which new alerts join an open incident
+    # for the same subject (server + agent) instead of opening a fresh case.
+    INCIDENT_WINDOW_SECONDS: int = 3600  # 1 hour
+
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"

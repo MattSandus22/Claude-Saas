@@ -13,6 +13,7 @@ import {
   LogOut,
   Radar,
   KeyRound,
+  Siren,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,7 @@ const NAV = [
   { href: "/discovery", label: "Discovery", icon: Radar },
   { href: "/events", label: "Events", icon: Activity },
   { href: "/alerts", label: "Alerts", icon: Bell },
+  { href: "/incidents", label: "Incidents", icon: Siren },
   { href: "/policies", label: "Policies", icon: FileLock2 },
   { href: "/apikeys", label: "API Keys", icon: KeyRound, adminOnly: true },
   { href: "/audit", label: "Audit Log", icon: ScrollText, adminOnly: true },

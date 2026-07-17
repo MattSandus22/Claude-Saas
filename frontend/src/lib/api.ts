@@ -122,7 +122,25 @@ export interface Alert {
   severity: string;
   status: string;
   evidence: Record<string, unknown>;
+  incident_id: string | null;
   created_at: string;
+}
+
+export interface Incident {
+  id: string;
+  title: string;
+  server_id: string | null;
+  agent_id: string | null;
+  severity: string;
+  status: string;
+  alert_count: number;
+  rule_ids: string[];
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface IncidentDetail extends Incident {
+  alerts: Alert[];
 }
 
 export interface MCPEvent {
@@ -155,6 +173,7 @@ export interface DashboardStats {
   total_events: number;
   blocked_events: number;
   open_alerts: number;
+  open_incidents: number;
   alerts_by_severity: Record<string, number>;
   events_last_7d: { date: string; total: number; blocked: number }[];
   top_risky_servers: { id: string; name: string; risk_score: number; status: string }[];
@@ -232,6 +251,13 @@ export const api = {
       `/agents/${encodeURIComponent(agentId)}/unblock`,
       { method: "POST" }
     ),
+  incidents: (params = "") => request<Incident[]>(`/incidents${params}`),
+  incident: (id: string) => request<IncidentDetail>(`/incidents/${id}`),
+  updateIncident: (id: string, status: string) =>
+    request<IncidentDetail>(`/incidents/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
   apiKeys: () => request<ApiKey[]>("/apikeys"),
   createApiKey: (name: string) =>
     request<ApiKeyCreated>("/apikeys", {

@@ -164,7 +164,48 @@ class Alert(Base):
     severity: Mapped[Severity] = mapped_column(Enum(Severity), default=Severity.medium)
     status: Mapped[AlertStatus] = mapped_column(Enum(AlertStatus), default=AlertStatus.open)
     evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Case management: the incident this alert was grouped into (Phase 10).
+    incident_id: Mapped[str | None] = mapped_column(
+        ForeignKey("incidents.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, index=True
+    )
+
+
+class Incident(Base):
+    """A case grouping related alerts.
+
+    Firing thirteen detection rules produces a stream of individual alerts; an
+    analyst works *incidents*, not a firehose. Alerts sharing a subject
+    (server + agent) inside a time window are grouped into one incident so a
+    single coordinated attack shows up as one case with a rolled-up severity and
+    a running alert count, not dozens of disconnected rows.
+
+    The rollup severity is the max over member alerts (an incident is as serious
+    as its worst signal). Resolving/acknowledging an incident is the triage unit.
+    """
+
+    __tablename__ = "incidents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # Grouping key derived from (server_id, agent_id); alerts with the same key
+    # in the correlation window attach to the same open incident.
+    group_key: Mapped[str] = mapped_column(String(512), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    server_id: Mapped[str | None] = mapped_column(
+        ForeignKey("mcp_servers.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    agent_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    severity: Mapped[Severity] = mapped_column(Enum(Severity), default=Severity.low)
+    status: Mapped[AlertStatus] = mapped_column(
+        Enum(AlertStatus), default=AlertStatus.open, index=True
+    )
+    alert_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Distinct detection rule ids that have contributed to this incident.
+    rule_ids: Mapped[list] = mapped_column(JSON, default=list)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, index=True
     )
 

@@ -14,6 +14,7 @@ from app.models import (
     Alert,
     AlertStatus,
     AuditLog,
+    Incident,
     MCPEvent,
     MCPServer,
     MCPTool,
@@ -51,6 +52,9 @@ async def dashboard_stats(
     )
     open_alerts = await scalar(
         select(func.count(Alert.id)).where(Alert.status == AlertStatus.open)
+    )
+    open_incidents = await scalar(
+        select(func.count(Incident.id)).where(Incident.status == AlertStatus.open)
     )
 
     # Alerts by severity.
@@ -97,6 +101,7 @@ async def dashboard_stats(
         total_events=total_events,
         blocked_events=blocked_events,
         open_alerts=open_alerts,
+        open_incidents=open_incidents,
         alerts_by_severity=alerts_by_severity,
         events_last_7d=events_last_7d,
         top_risky_servers=top_risky_servers,

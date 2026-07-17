@@ -24,7 +24,17 @@ from app.detection.correlation import detect_correlation_anomaly
 from app.detection.datavolume import detect_data_volume_anomaly
 from app.detection.sequence import detect_sequence_anomaly
 from app.detection.rules import analyze_message, combine_score
-from app.models import Alert, AlertStatus, MCPEvent, MCPServer, Policy, ServerStatus, Severity
+from app.models import (
+    Alert,
+    AlertStatus,
+    Incident,
+    MCPEvent,
+    MCPServer,
+    Policy,
+    ServerStatus,
+    Severity,
+)
+from app.services.incidents import attach_alerts_to_incident
 from app.services.notify import notify_alerts
 from app.services.policy import evaluate_policies
 
@@ -40,6 +50,7 @@ class InspectionOutcome:
         self.blocked: bool = False
         self.allowed_by_policy: bool = True
         self.alerts: list[Alert] = []
+        self.incident: Incident | None = None
         self.reasons: list[str] = []
 
 
@@ -174,6 +185,16 @@ async def inspect_message(
     for a in outcome.alerts:
         await db.refresh(a)
 
-    # 6. Notify (or simulate) for high/critical alerts. Never raises.
+    # 6. Case management: group all alerts from this message into an incident
+    #    (opening a new case or joining an open one for the same subject).
+    if outcome.alerts:
+        outcome.incident = await attach_alerts_to_incident(
+            db, outcome.alerts, server_id=server_id, agent_id=agent_id
+        )
+        await db.commit()
+        if outcome.incident is not None:
+            await db.refresh(outcome.incident)
+
+    # 7. Notify (or simulate) for high/critical alerts. Never raises.
     await notify_alerts(outcome.alerts)
     return outcome
