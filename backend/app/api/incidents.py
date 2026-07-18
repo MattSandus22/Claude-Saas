@@ -12,11 +12,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_admin
 from app.db.session import get_db
-from app.models import Alert, AlertStatus, Incident, User
-from app.schemas import AlertOut, IncidentDetail, IncidentOut, IncidentUpdate
+from app.models import Alert, AlertStatus, Incident, MCPServer, ServerStatus, User
+from app.schemas import (
+    AlertOut,
+    ApplyActionRequest,
+    ApplyActionResult,
+    IncidentDetail,
+    IncidentOut,
+    IncidentUpdate,
+    RecommendedActionOut,
+)
 from app.services.audit import record
+from app.services.recommend import recommend_actions
+from app.services.response import block_agent
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -90,3 +100,69 @@ async def update_incident(
     detail = IncidentDetail.model_validate(incident)
     detail.alerts = [AlertOut.model_validate(a) for a in member_alerts]
     return detail
+
+
+@router.get("/{incident_id}/recommended-actions", response_model=list[RecommendedActionOut])
+async def recommended_actions(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Advisory containment actions for this case (most urgent first).
+
+    Read-only: computing suggestions never changes state. Applying one is a
+    separate admin action below.
+    """
+    incident = await db.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return [RecommendedActionOut(**vars(a)) for a in recommend_actions(incident)]
+
+
+@router.post("/{incident_id}/apply-action", response_model=ApplyActionResult)
+async def apply_action(
+    incident_id: str,
+    body: ApplyActionRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Execute a containment action from the case. Admin-only and audited.
+
+    Only actions the recommender suggested for THIS incident are allowed — an
+    analyst cannot use a case as a lever to quarantine/contain an unrelated
+    subject. The action reuses the same containment paths as the servers/agents
+    APIs (no new bypass surface).
+    """
+    incident = await db.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    suggested = {a.action: a for a in recommend_actions(incident)}
+    rec = suggested.get(body.action)
+    if rec is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Action '{body.action}' is not recommended for this incident",
+        )
+
+    if body.action == "contain_agent":
+        agents = await block_agent(db, rec.target)
+        await record(db, actor=admin.email, action="incident.contain_agent",
+                     target=incident_id, detail={"agent_id": rec.target})
+        return ApplyActionResult(
+            applied="contain_agent", target=rec.target,
+            detail=f"Agent contained; blocklist now has {len(agents)} agent(s).",
+        )
+
+    # quarantine_server
+    server = await db.get(MCPServer, rec.target)
+    if server is None:
+        raise HTTPException(status_code=404, detail="Server no longer exists")
+    server.status = ServerStatus.quarantined
+    await db.commit()
+    await record(db, actor=admin.email, action="incident.quarantine_server",
+                 target=incident_id, detail={"server_id": rec.target})
+    return ApplyActionResult(
+        applied="quarantine_server", target=rec.target,
+        detail=f"Server '{server.name}' quarantined; its traffic is now denied.",
+    )

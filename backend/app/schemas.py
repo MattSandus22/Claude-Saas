@@ -200,6 +200,24 @@ class IncidentUpdate(BaseModel):
     status: Literal["open", "acknowledged", "resolved"]
 
 
+class RecommendedActionOut(BaseModel):
+    action: Literal["contain_agent", "quarantine_server"]
+    target: str
+    reason: str
+    urgency: Literal["recommended", "urgent"]
+    triggering_rules: list[str]
+
+
+class ApplyActionRequest(BaseModel):
+    action: Literal["contain_agent", "quarantine_server"]
+
+
+class ApplyActionResult(BaseModel):
+    applied: str
+    target: str
+    detail: str
+
+
 # ---- Policies ----
 class PolicyCreate(BaseModel):
     name: str = Field(max_length=255)

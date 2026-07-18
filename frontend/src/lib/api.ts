@@ -143,6 +143,14 @@ export interface IncidentDetail extends Incident {
   alerts: Alert[];
 }
 
+export interface RecommendedAction {
+  action: "contain_agent" | "quarantine_server";
+  target: string;
+  reason: string;
+  urgency: "recommended" | "urgent";
+  triggering_rules: string[];
+}
+
 export interface MCPEvent {
   id: string;
   server_id: string | null;
@@ -258,6 +266,13 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ status }),
     }),
+  incidentActions: (id: string) =>
+    request<RecommendedAction[]>(`/incidents/${id}/recommended-actions`),
+  applyIncidentAction: (id: string, action: string) =>
+    request<{ applied: string; target: string; detail: string }>(
+      `/incidents/${id}/apply-action`,
+      { method: "POST", body: JSON.stringify({ action }) }
+    ),
   apiKeys: () => request<ApiKey[]>("/apikeys"),
   createApiKey: (name: string) =>
     request<ApiKeyCreated>("/apikeys", {

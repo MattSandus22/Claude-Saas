@@ -1,18 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type Incident, type IncidentDetail } from "@/lib/api";
+import {
+  api,
+  type Incident,
+  type IncidentDetail,
+  type RecommendedAction,
+} from "@/lib/api";
 import { Card, Badge, Button, EmptyState } from "@/components/ui";
 import { formatDate, severityColor, statusColor } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
 const STATUS_FILTERS = ["all", "open", "acknowledged", "resolved"];
 
 export default function IncidentsPage() {
+  const { user } = useAuth();
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [filter, setFilter] = useState("all");
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [detail, setDetail] = useState<IncidentDetail | null>(null);
+  const [actions, setActions] = useState<RecommendedAction[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -31,17 +40,32 @@ export default function IncidentsPage() {
     if (expanded === id) {
       setExpanded(null);
       setDetail(null);
+      setActions([]);
       return;
     }
     setExpanded(id);
-    setDetail(await api.incident(id));
+    setNotice(null);
+    const [d, a] = await Promise.all([api.incident(id), api.incidentActions(id)]);
+    setDetail(d);
+    setActions(a);
   }
 
   async function triage(id: string, status: string) {
     await api.updateIncident(id, status);
     setExpanded(null);
     setDetail(null);
+    setActions([]);
     load();
+  }
+
+  async function applyAction(id: string, action: string) {
+    try {
+      const res = await api.applyIncidentAction(id, action);
+      setNotice(res.detail);
+      setActions(await api.incidentActions(id));
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Failed to apply action");
+    }
   }
 
   return (
@@ -107,7 +131,49 @@ export default function IncidentsPage() {
               </div>
 
               {expanded === inc.id && detail && (
-                <div className="space-y-2 border-t border-border pt-3">
+                <div className="space-y-3 border-t border-border pt-3">
+                  {actions.length > 0 && (
+                    <div className="rounded-lg border border-warn/40 bg-warn/5 p-3">
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-warn">
+                        Recommended response
+                      </p>
+                      {notice && <p className="mb-2 text-xs text-ok">{notice}</p>}
+                      <div className="space-y-2">
+                        {actions.map((a) => (
+                          <div key={a.action} className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  className={
+                                    a.urgency === "urgent"
+                                      ? "border-critical/40 text-critical"
+                                      : "border-warn/40 text-warn"
+                                  }
+                                >
+                                  {a.urgency}
+                                </Badge>
+                                <span className="text-sm font-medium text-white">
+                                  {a.action === "contain_agent"
+                                    ? "Contain agent"
+                                    : "Quarantine server"}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-muted">{a.reason}</p>
+                            </div>
+                            {user?.role === "admin" && (
+                              <Button
+                                variant="danger"
+                                className="text-xs"
+                                onClick={() => applyAction(inc.id, a.action)}
+                              >
+                                Apply
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {detail.alerts.map((a) => (
                     <div key={a.id} className="rounded-lg border border-border bg-bg p-3">
                       <div className="flex flex-wrap items-center gap-2">
