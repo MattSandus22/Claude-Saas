@@ -299,6 +299,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ assignee_email }),
     }),
+  sweepSla: () =>
+    request<{ newly_breached: number; incident_ids: string[] }>(
+      "/incidents/sweep-sla",
+      { method: "POST" }
+    ),
   incidentTimeline: (id: string) =>
     request<{ incident_id: string; events: TimelineEvent[] }>(
       `/incidents/${id}/timeline`

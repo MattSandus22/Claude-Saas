@@ -109,6 +109,20 @@ export default function IncidentsPage() {
     }
   }
 
+  async function sweepSla() {
+    try {
+      const res = await api.sweepSla();
+      setNotice(
+        res.newly_breached === 0
+          ? "SLA sweep: no new breaches."
+          : `SLA sweep: ${res.newly_breached} case(s) newly breached and alerted.`
+      );
+      load();
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : "Sweep failed");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between">
@@ -119,6 +133,11 @@ export default function IncidentsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {user?.role === "admin" && (
+            <Button variant="ghost" onClick={sweepSla}>
+              Sweep SLA
+            </Button>
+          )}
           {STATUS_FILTERS.map((f) => (
             <Button key={f} variant={filter === f ? "primary" : "ghost"} onClick={() => setFilter(f)}>
               {f}
@@ -126,6 +145,12 @@ export default function IncidentsPage() {
           ))}
         </div>
       </div>
+
+      {notice && !expanded && (
+        <div className="rounded-lg border border-brand/40 bg-brand-dark/10 px-4 py-2 text-sm text-slate-200">
+          {notice}
+        </div>
+      )}
 
       {metrics && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-5">

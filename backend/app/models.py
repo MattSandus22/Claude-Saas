@@ -222,6 +222,9 @@ class Incident(Base):
     acknowledged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set once the SLA-breach sweep has raised a breach alert for this case, so a
+    # breach fires exactly one notification, not one per sweep.
+    sla_breach_notified: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Policy(Base):

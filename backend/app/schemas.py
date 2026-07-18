@@ -215,6 +215,11 @@ class IncidentAssign(BaseModel):
     assignee_email: Email | None = None
 
 
+class SlaSweepResult(BaseModel):
+    newly_breached: int
+    incident_ids: list[str]
+
+
 class RecommendedActionOut(BaseModel):
     action: Literal["contain_agent", "quarantine_server"]
     target: str

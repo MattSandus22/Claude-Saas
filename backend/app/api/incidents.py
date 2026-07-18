@@ -27,12 +27,14 @@ from app.schemas import (
     IncidentUpdate,
     RecommendedActionOut,
     SlaStatus,
+    SlaSweepResult,
 )
 from app.services.audit import record
 from app.services.metrics import build_timeline, incident_metrics
 from app.services.recommend import recommend_actions
 from app.services.response import block_agent
 from app.services.sla import sla_status
+from app.services.sla_sweep import sweep_sla_breaches
 
 
 def _to_out(incident: Incident) -> IncidentOut:
@@ -74,6 +76,27 @@ async def metrics(
     Declared before /{incident_id} so the literal path is not captured as an id.
     """
     return await incident_metrics(db, days=days)
+
+
+@router.post("/sweep-sla", response_model=SlaSweepResult)
+async def sweep_sla(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Raise + notify a breach alert for each newly-breached open case.
+
+    Idempotent (each breach notifies once). Intended to be hit on a schedule
+    (cron/systemd timer) or on demand. Literal path, declared before
+    /{incident_id}. Admin-only: it can generate alerts and outbound webhooks.
+    """
+    created = await sweep_sla_breaches(db)
+    if created:
+        await record(db, actor=admin.email, action="incident.sla_sweep",
+                     detail={"newly_breached": len(created)})
+    return SlaSweepResult(
+        newly_breached=len(created),
+        incident_ids=[a.incident_id for a in created if a.incident_id],
+    )
 
 
 @router.get("/{incident_id}", response_model=IncidentDetail)
