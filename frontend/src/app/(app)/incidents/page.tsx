@@ -5,28 +5,42 @@ import {
   api,
   type Incident,
   type IncidentDetail,
+  type IncidentMetrics,
   type RecommendedAction,
+  type TimelineEvent,
 } from "@/lib/api";
-import { Card, Badge, Button, EmptyState } from "@/components/ui";
+import { Card, Badge, Button, EmptyState, StatTile } from "@/components/ui";
 import { formatDate, severityColor, statusColor } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 
 const STATUS_FILTERS = ["all", "open", "acknowledged", "resolved"];
 
+function formatDuration(seconds: number | null): string {
+  if (seconds == null) return "—";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+  return `${(seconds / 86400).toFixed(1)}d`;
+}
+
 export default function IncidentsPage() {
   const { user } = useAuth();
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [metrics, setMetrics] = useState<IncidentMetrics | null>(null);
   const [filter, setFilter] = useState("all");
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [detail, setDetail] = useState<IncidentDetail | null>(null);
   const [actions, setActions] = useState<RecommendedAction[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
 
   async function load() {
     try {
       const q = filter === "all" ? "" : `?status=${filter}`;
-      setIncidents(await api.incidents(q));
+      const [list, m] = await Promise.all([api.incidents(q), api.incidentMetrics()]);
+      setIncidents(list);
+      setMetrics(m);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     }
@@ -41,13 +55,19 @@ export default function IncidentsPage() {
       setExpanded(null);
       setDetail(null);
       setActions([]);
+      setTimeline([]);
       return;
     }
     setExpanded(id);
     setNotice(null);
-    const [d, a] = await Promise.all([api.incident(id), api.incidentActions(id)]);
+    const [d, a, tl] = await Promise.all([
+      api.incident(id),
+      api.incidentActions(id),
+      api.incidentTimeline(id),
+    ]);
     setDetail(d);
     setActions(a);
+    setTimeline(tl.events);
   }
 
   async function triage(id: string, status: string) {
@@ -55,6 +75,7 @@ export default function IncidentsPage() {
     setExpanded(null);
     setDetail(null);
     setActions([]);
+    setTimeline([]);
     load();
   }
 
@@ -85,6 +106,18 @@ export default function IncidentsPage() {
           ))}
         </div>
       </div>
+
+      {metrics && (
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <StatTile label="Open cases" value={metrics.open_incidents} />
+          <StatTile label="Resolved" value={metrics.resolved_incidents} />
+          <StatTile label="Total" value={metrics.total_incidents} />
+          <StatTile
+            label="Mean time to resolve"
+            value={formatDuration(metrics.mttr_seconds)}
+          />
+        </div>
+      )}
 
       {error && <EmptyState message={error} />}
       {incidents.length === 0 && !error ? (
@@ -185,6 +218,23 @@ export default function IncidentsPage() {
                       <p className="text-xs text-muted">{a.description}</p>
                     </div>
                   ))}
+
+                  {timeline.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+                        Timeline
+                      </p>
+                      <ol className="space-y-1 border-l border-border pl-4">
+                        {timeline.map((e, i) => (
+                          <li key={i} className="relative text-xs text-muted">
+                            <span className="absolute -left-[21px] top-1 h-2 w-2 rounded-full bg-border" />
+                            <span className="text-slate-400">{formatDate(e.at)}</span>{" "}
+                            <span className="text-slate-200">{e.detail}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
                 </div>
               )}
             </Card>

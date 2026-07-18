@@ -87,6 +87,17 @@ async def attach_alerts_to_incident(
 
     incident = existing
     if incident is None:
+        # Open the case at its earliest alert's time (the alerts were persisted a
+        # moment before grouping ran), so the "opened" event precedes its alerts
+        # on the timeline and MTTR measures from when the case actually began.
+        # SQLite returns naive datetimes after refresh; coerce to UTC-aware so
+        # the comparison with `now` is well-defined.
+        alert_times = [
+            a.created_at if a.created_at.tzinfo else a.created_at.replace(tzinfo=timezone.utc)
+            for a in alerts
+            if a.created_at is not None
+        ]
+        opened_at = min([now, *alert_times]) if alert_times else now
         incident = Incident(
             group_key=key,
             title=_title(server_id, agent_id),
@@ -96,7 +107,7 @@ async def attach_alerts_to_incident(
             status=AlertStatus.open,
             alert_count=0,
             rule_ids=[],
-            first_seen=now,
+            first_seen=opened_at,
             last_seen=now,
         )
         db.add(incident)

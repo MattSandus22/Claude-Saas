@@ -151,6 +151,22 @@ export interface RecommendedAction {
   triggering_rules: string[];
 }
 
+export interface IncidentMetrics {
+  total_incidents: number;
+  open_incidents: number;
+  resolved_incidents: number;
+  mttr_seconds: number | null;
+  by_severity: Record<string, number>;
+  resolved_last_days: { date: string; resolved: number }[];
+}
+
+export interface TimelineEvent {
+  at: string;
+  kind: "opened" | "alert" | "action";
+  detail: string;
+  severity?: string;
+}
+
 export interface MCPEvent {
   id: string;
   server_id: string | null;
@@ -266,6 +282,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ status }),
     }),
+  incidentMetrics: () => request<IncidentMetrics>("/incidents/metrics"),
+  incidentTimeline: (id: string) =>
+    request<{ incident_id: string; events: TimelineEvent[] }>(
+      `/incidents/${id}/timeline`
+    ),
   incidentActions: (id: string) =>
     request<RecommendedAction[]>(`/incidents/${id}/recommended-actions`),
   applyIncidentAction: (id: string, action: string) =>

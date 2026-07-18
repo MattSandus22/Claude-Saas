@@ -113,6 +113,7 @@ guardrails:
 23. **Cross‑agent correlation (R13)** *(Phase 9)* — An aggregate detector keyed on the *server*, not the agent: it catches a coordinated campaign that spreads activity across many agents so each stays under every per‑agent limit while together they swarm one target. Flags a fan‑in surge (many distinct agents on one server in a short window, high) and a coordinated blocked burst (multiple distinct agents tripping enforcement on the same server at once, critical). Deduplicated per server; env‑tunable (`CORRELATION_*`).
 24. **Incident case management** *(Phase 10)* — Thirteen detection rules produce a stream of individual alerts; analysts work *incidents*, not a firehose. Alerts sharing a subject (server + agent) within a window are grouped into one case with a rolled‑up severity (as serious as its worst alert), a running alert count, and the set of contributing rules. Triaging a case cascades to its member alerts. Surfaced as an `/incidents` page in the dashboard and `GET/PATCH /incidents`; env‑tunable window (`INCIDENT_WINDOW_SECONDS`).
 25. **Incident response recommendations** *(Phase 11)* — Each case computes advisory containment actions from the rules that fired: agent‑behavior rules (R6–R8, R10–R12) suggest *containing the agent*; drift/rug‑pull (R9) and campaign correlation (R13) suggest *quarantining the server*. An admin can apply an action in one click from the case; the apply endpoint only permits actions the recommender suggested for that specific incident (a case can't be used as a lever against an unrelated subject), reuses the existing containment paths, and is fully audited.
+26. **Incident metrics & timeline** *(Phase 12)* — Operational reporting over the case load: open/resolved counts, **MTTR** (mean time to resolve, measured from the case's earliest alert to its closure), the severity mix, and a resolved‑per‑day trend — surfaced as metric tiles on the dashboard. Each case also has a **timeline** reconstructed from the incident, its member alerts, and the audit trail (opened → each alert → each triage action), with no separate event log to keep in sync. Resolving stamps a closure time; reopening clears it so MTTR only reflects genuine closures.
 
 ---
 
@@ -287,6 +288,8 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `PATCH` | `/incidents/{id}` | any | Triage a case; cascades status to member alerts. |
 | `GET` | `/incidents/{id}/recommended-actions` | any | Advisory containment actions for the case. |
 | `POST` | `/incidents/{id}/apply-action` | admin | Apply a recommended containment action (contain agent / quarantine server). |
+| `GET` | `/incidents/metrics` | any | Case‑load metrics: open/resolved counts, MTTR, severity mix, resolved trend. |
+| `GET` | `/incidents/{id}/timeline` | any | Chronological case activity (opened, alerts, triage actions). |
 
 **Integration auth:** `/inspect`, `/servers/scan`, and `POST /servers` also
 accept an `X-API-Key: mcpg_…` header instead of a bearer token, so gateways and
@@ -367,10 +370,10 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 91 passed — unit (detection, policy, sanitizer, drift, statistical/sequence/
-#             data-volume baselines, cross-agent correlation, incident grouping,
-#             response recommendations) + integration (full API, quarantine,
-#             versioning/rollback, R10-R13, incident case management + apply-action)
+# 97 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
+#             incident grouping, response recommendations, MTTR/timeline) +
+#             integration (full API, quarantine, versioning/rollback, R10-R13,
+#             incident case management + apply-action + metrics/timeline)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest -q
@@ -401,6 +404,7 @@ The suite **simulates attacks and verifies defenses**:
 - cross‑agent correlation (R13) → a swarm of distinct agents on one server raises a fan‑in alert; multiple blocked agents raise a critical burst; a quiet server and a *different* server do not trigger; the campaign alert deduplicates per server
 - incident grouping → alerts sharing a subject collapse into one case with the severity rolled up to the worst member; a second message within the window joins the open case; different subjects and stale cases get their own; resolving a case cascades to its alerts
 - response recommendations → agent‑behavior rules suggest containing the agent, drift/campaign rules suggest quarantining the server; applying from the case actually contains the agent (a later benign message is denied); an action the recommender didn't suggest for that case is refused; apply is admin‑only
+- metrics & timeline → resolving a case raises the resolved count and yields a non‑null MTTR; reopening clears the closure; the timeline orders opened → alert → triage action; `/incidents/metrics` resolves to metrics, not `get_incident("metrics")`
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -427,11 +431,12 @@ Claude-Saas/
 │   │   ├── detection/            # rules(R1-R5), anomaly(R6-R8), baseline(R10), sequence(R11), datavolume(R12), correlation(R13)
 │   │   ├── services/incidents.py # case management: group alerts into incidents
 │   │   ├── services/recommend.py # incident -> advisory containment actions
+│   │   ├── services/metrics.py   # incident MTTR/volume metrics + case timeline
 │   │   ├── services/             # discovery, policy, inspector, audit, apikeys,
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (91 tests)
+│   └── tests/                    # unit + integration (97 tests)
 ├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
@@ -522,14 +527,20 @@ Shipped in Phase 11 ✅:
   an admin applies one in a click. Apply is guarded to the case's own subject,
   reuses existing containment paths, and is audited.
 
-Prioritized next (Phase 12):
+Shipped in Phase 12 ✅:
+
+- **Incident metrics & timeline.** MTTR, open/resolved/severity metrics and a
+  resolved‑per‑day trend, plus a per‑case timeline reconstructed from the
+  incident, its alerts, and the audit trail (no separate event log).
+
+Prioritized next (Phase 13):
 
 1. **More integrations.** SIEM/Slack/PagerDuty alert routing and SSO/SCIM
    (WorkOS/Okta).
 2. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego
    export, and per‑environment policy bundles.
-3. **Incident timeline & metrics.** Per‑case activity timeline and MTTR/volume
-   dashboards.
+3. **Assignments & SLAs.** Assign incidents to owners and track against
+   severity‑based response‑time SLAs.
 
 ---
 

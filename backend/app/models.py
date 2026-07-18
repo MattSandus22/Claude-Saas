@@ -208,6 +208,11 @@ class Incident(Base):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, index=True
     )
+    # Set when the case transitions to resolved; drives MTTR metrics. Cleared if
+    # a resolved case is reopened, so MTTR only ever reflects genuine closures.
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Policy(Base):

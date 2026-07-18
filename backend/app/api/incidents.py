@@ -8,13 +8,15 @@ the two views never disagree.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin
 from app.db.session import get_db
-from app.models import Alert, AlertStatus, Incident, MCPServer, ServerStatus, User
+from app.models import Alert, AlertStatus, AuditLog, Incident, MCPServer, ServerStatus, User
 from app.schemas import (
     AlertOut,
     ApplyActionRequest,
@@ -25,6 +27,7 @@ from app.schemas import (
     RecommendedActionOut,
 )
 from app.services.audit import record
+from app.services.metrics import build_timeline, incident_metrics
 from app.services.recommend import recommend_actions
 from app.services.response import block_agent
 
@@ -48,6 +51,19 @@ async def list_incidents(
     stmt = stmt.limit(limit)
     result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+@router.get("/metrics")
+async def metrics(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+    days: int = Query(default=7, ge=1, le=90),
+):
+    """Operational metrics over the case load (MTTR, volume, severity mix).
+
+    Declared before /{incident_id} so the literal path is not captured as an id.
+    """
+    return await incident_metrics(db, days=days)
 
 
 @router.get("/{incident_id}", response_model=IncidentDetail)
@@ -86,6 +102,12 @@ async def update_incident(
 
     new_status = AlertStatus(body.status)
     incident.status = new_status
+    # Track closure time for MTTR; clear it if a resolved case is reopened so
+    # metrics only reflect genuine closures.
+    if new_status == AlertStatus.resolved:
+        incident.resolved_at = datetime.now(timezone.utc)
+    else:
+        incident.resolved_at = None
     # Cascade to member alerts so the alert view and case view stay consistent.
     member_alerts = (
         await db.execute(select(Alert).where(Alert.incident_id == incident_id))
@@ -166,3 +188,30 @@ async def apply_action(
         applied="quarantine_server", target=rec.target,
         detail=f"Server '{server.name}' quarantined; its traffic is now denied.",
     )
+
+
+@router.get("/{incident_id}/timeline")
+async def timeline(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Chronological activity for a case: opening, each alert, and triage actions.
+
+    Reconstructed from the incident, its member alerts, and the audit trail — no
+    separate event log to keep in sync.
+    """
+    incident = await db.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    alerts = (
+        await db.execute(select(Alert).where(Alert.incident_id == incident_id))
+    ).scalars().all()
+    audit = (
+        await db.execute(
+            select(AuditLog)
+            .where(AuditLog.target == incident_id)
+            .order_by(AuditLog.created_at.asc())
+        )
+    ).scalars().all()
+    return {"incident_id": incident_id, "events": build_timeline(incident, alerts, audit)}
