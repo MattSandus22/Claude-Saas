@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"
+    # Payload shape: "generic" ({source, alerts}) or "slack" (Block Kit message
+    # for a Slack incoming webhook). Auto-detects Slack when the URL host is a
+    # Slack hooks endpoint, unless overridden here.
+    ALERT_WEBHOOK_FORMAT: str = "auto"
     # Dev-only escape hatches for the SSRF guard; never enable in production.
     ALERT_WEBHOOK_ALLOW_INSECURE: bool = False
     ALERT_WEBHOOK_ALLOW_PRIVATE: bool = False

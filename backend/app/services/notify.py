@@ -71,6 +71,79 @@ def validate_webhook_url(url: str) -> tuple[bool, str]:
     return True, "ok"
 
 
+# Severity -> Slack visual cues (attachment color bar + a leading emoji).
+_SEVERITY_EMOJI = {
+    "info": ":information_source:",
+    "low": ":large_blue_circle:",
+    "medium": ":large_yellow_circle:",
+    "high": ":large_orange_circle:",
+    "critical": ":red_circle:",
+}
+_SEVERITY_COLOR = {
+    "info": "#3987e5",
+    "low": "#0ca30c",
+    "medium": "#fab219",
+    "high": "#ec835a",
+    "critical": "#d03b3b",
+}
+
+
+def _worst_severity(payloads: list[dict]) -> str:
+    return max((p["severity"] for p in payloads), key=_severity_rank, default="info")
+
+
+def build_slack_payload(payloads: list[dict]) -> dict:
+    """Build a Slack incoming-webhook message (Block Kit) from alert payloads.
+
+    Pure and dependency-free so it is unit-tested in isolation. Uses a header +
+    one context/section block per alert, and an attachment color bar keyed to the
+    single worst severity so the message reads at a glance in a channel.
+    """
+    n = len(payloads)
+    worst = _worst_severity(payloads)
+    header = (
+        f"{_SEVERITY_EMOJI.get(worst, '')} MCPGuard: {n} "
+        f"{'alert' if n == 1 else 'alerts'} ({worst.upper()})"
+    ).strip()
+
+    blocks: list[dict] = [
+        {"type": "header", "text": {"type": "plain_text", "text": header[:150]}}
+    ]
+    # Slack caps blocks (~50); keep well under and summarize the remainder.
+    shown = payloads[:10]
+    for p in shown:
+        emoji = _SEVERITY_EMOJI.get(p["severity"], "")
+        line = f"{emoji} *{p['rule_id']}* — {p['title']}"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": line[:3000]}})
+        if p.get("description"):
+            blocks.append({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": str(p["description"])[:1000]}],
+            })
+    if n > len(shown):
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"_…and {n - len(shown)} more_"}],
+        })
+
+    # `text` is the notification fallback (required for accessibility/mobile).
+    fallback = f"MCPGuard: {n} alert(s), worst {worst.upper()}"
+    return {
+        "text": fallback,
+        "attachments": [{"color": _SEVERITY_COLOR.get(worst, "#3987e5"), "blocks": blocks}],
+    }
+
+
+def _select_format(url: str) -> str:
+    """Resolve the payload format for a URL, honoring config and auto-detection."""
+    fmt = (settings.ALERT_WEBHOOK_FORMAT or "auto").lower()
+    if fmt in ("slack", "generic"):
+        return fmt
+    # auto: Slack incoming webhooks live at hooks.slack.com.
+    host = (urlparse(url).hostname or "").lower()
+    return "slack" if host.endswith("slack.com") else "generic"
+
+
 async def notify_alerts(alerts: list) -> int:
     """Send qualifying alerts to the configured webhook. Returns count sent.
 
@@ -112,9 +185,14 @@ async def notify_alerts(alerts: list) -> int:
         logger.error("Webhook not sent: %s", reason)
         return 0
 
+    if _select_format(url) == "slack":
+        body = build_slack_payload(payloads)
+    else:
+        body = {"source": "mcpguard", "alerts": payloads}
+
     try:
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
-            await client.post(url, json={"source": "mcpguard", "alerts": payloads})
+            await client.post(url, json=body)
         return len(payloads)
     except httpx.HTTPError as exc:
         logger.error("Webhook delivery failed: %s", exc)
