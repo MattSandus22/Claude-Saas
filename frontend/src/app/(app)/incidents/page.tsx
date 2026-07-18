@@ -23,6 +23,20 @@ function formatDuration(seconds: number | null): string {
   return `${(seconds / 86400).toFixed(1)}d`;
 }
 
+const SLA_LABEL: Record<string, string> = {
+  on_track: "SLA on track",
+  due_soon: "SLA due soon",
+  breached: "SLA breached",
+  met: "SLA met",
+};
+
+function slaBadgeClass(status: string): string {
+  if (status === "breached") return "border-critical/40 text-critical";
+  if (status === "due_soon") return "border-warn/40 text-warn";
+  if (status === "met") return "border-ok/40 text-ok";
+  return "border-border bg-surface-2 text-muted";
+}
+
 export default function IncidentsPage() {
   const { user } = useAuth();
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -79,6 +93,12 @@ export default function IncidentsPage() {
     load();
   }
 
+  async function assignToMe(id: string) {
+    if (!user) return;
+    await api.assignIncident(id, user.email);
+    load();
+  }
+
   async function applyAction(id: string, action: string) {
     try {
       const res = await api.applyIncidentAction(id, action);
@@ -108,8 +128,13 @@ export default function IncidentsPage() {
       </div>
 
       {metrics && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
           <StatTile label="Open cases" value={metrics.open_incidents} />
+          <StatTile
+            label="SLA breaches"
+            value={metrics.sla_breaches}
+            accent={metrics.sla_breaches > 0 ? "text-critical" : undefined}
+          />
           <StatTile label="Resolved" value={metrics.resolved_incidents} />
           <StatTile label="Total" value={metrics.total_incidents} />
           <StatTile
@@ -134,6 +159,11 @@ export default function IncidentsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge className={severityColor(inc.severity)}>{inc.severity}</Badge>
                     <Badge className={statusColor(inc.status)}>{inc.status}</Badge>
+                    {inc.sla && (
+                      <Badge className={slaBadgeClass(inc.sla.status)}>
+                        {SLA_LABEL[inc.sla.status]}
+                      </Badge>
+                    )}
                     <Badge className="border-border bg-surface-2 text-muted">
                       {inc.alert_count} alert{inc.alert_count === 1 ? "" : "s"}
                     </Badge>
@@ -145,11 +175,17 @@ export default function IncidentsPage() {
                   </div>
                   <h3 className="mt-2 text-sm font-medium text-white">{inc.title}</h3>
                   <p className="mt-1 text-xs text-muted">
-                    {inc.agent_id ? `agent ${inc.agent_id}` : "unattributed"} · last activity{" "}
+                    {inc.agent_id ? `agent ${inc.agent_id}` : "unattributed"} ·{" "}
+                    {inc.assignee_id ? "assigned" : "unassigned"} · last activity{" "}
                     {formatDate(inc.last_seen)}
                   </p>
                 </button>
                 <div className="flex shrink-0 flex-col gap-2">
+                  {!inc.assignee_id && (
+                    <Button variant="ghost" className="text-xs" onClick={() => assignToMe(inc.id)}>
+                      Assign to me
+                    </Button>
+                  )}
                   {inc.status !== "acknowledged" && inc.status !== "resolved" && (
                     <Button variant="ghost" className="text-xs" onClick={() => triage(inc.id, "acknowledged")}>
                       Acknowledge

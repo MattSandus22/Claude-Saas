@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     # for the same subject (server + agent) instead of opening a fresh case.
     INCIDENT_WINDOW_SECONDS: int = 3600  # 1 hour
 
+    # Response-time SLAs (seconds to first acknowledgement), by severity. A case
+    # breaches if it is still 'open' past its target. Defaults: tighter for worse
+    # severities. Env-tunable per deployment.
+    SLA_CRITICAL_SECONDS: int = 900  # 15 min
+    SLA_HIGH_SECONDS: int = 3600  # 1 hour
+    SLA_MEDIUM_SECONDS: int = 14400  # 4 hours
+    SLA_LOW_SECONDS: int = 86400  # 24 hours
+
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"

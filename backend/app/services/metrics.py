@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Alert, AlertStatus, AuditLog, Incident, Severity
+from app.services.sla import sla_status
 
 
 def mean_time_to_resolve(pairs: list[tuple[datetime, datetime]]) -> float | None:
@@ -107,11 +108,20 @@ async def incident_metrics(db: AsyncSession, *, days: int = 7) -> dict[str, Any]
         buckets[day] = buckets.get(day, 0) + 1
     resolved_trend = [{"date": d, "resolved": c} for d, c in sorted(buckets.items())]
 
+    # SLA breaches among still-open cases (unacknowledged past their target).
+    open_incidents = (
+        await db.execute(
+            select(Incident).where(Incident.status == AlertStatus.open)
+        )
+    ).scalars().all()
+    sla_breaches = sum(1 for i in open_incidents if sla_status(i)["breached"])
+
     return {
         "total_incidents": total,
         "open_incidents": open_count,
         "resolved_incidents": resolved_count,
         "mttr_seconds": mttr,
+        "sla_breaches": sla_breaches,
         "by_severity": by_severity,
         "resolved_last_days": resolved_trend,
     }

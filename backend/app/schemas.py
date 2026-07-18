@@ -178,6 +178,14 @@ class AlertUpdate(BaseModel):
 
 
 # ---- Incidents (case management) ----
+class SlaStatus(BaseModel):
+    target_seconds: int
+    elapsed_seconds: float
+    acknowledged: bool
+    status: Literal["on_track", "due_soon", "breached", "met"]
+    breached: bool
+
+
 class IncidentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -188,8 +196,10 @@ class IncidentOut(BaseModel):
     status: str
     alert_count: int
     rule_ids: list[str]
+    assignee_id: str | None = None
     first_seen: datetime
     last_seen: datetime
+    sla: SlaStatus | None = None
 
 
 class IncidentDetail(IncidentOut):
@@ -198,6 +208,11 @@ class IncidentDetail(IncidentOut):
 
 class IncidentUpdate(BaseModel):
     status: Literal["open", "acknowledged", "resolved"]
+
+
+class IncidentAssign(BaseModel):
+    # Assign to a user by email; None unassigns.
+    assignee_email: Email | None = None
 
 
 class RecommendedActionOut(BaseModel):

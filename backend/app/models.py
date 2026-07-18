@@ -213,6 +213,15 @@ class Incident(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Case ownership. An assigned case has someone accountable for it.
+    assignee_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    # First moment the case left the 'open' state (acknowledged or resolved).
+    # Drives the response-time SLA: the clock stops on first acknowledgement.
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Policy(Base):

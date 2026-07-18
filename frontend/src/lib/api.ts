@@ -126,6 +126,14 @@ export interface Alert {
   created_at: string;
 }
 
+export interface SlaStatus {
+  target_seconds: number;
+  elapsed_seconds: number;
+  acknowledged: boolean;
+  status: "on_track" | "due_soon" | "breached" | "met";
+  breached: boolean;
+}
+
 export interface Incident {
   id: string;
   title: string;
@@ -135,8 +143,10 @@ export interface Incident {
   status: string;
   alert_count: number;
   rule_ids: string[];
+  assignee_id: string | null;
   first_seen: string;
   last_seen: string;
+  sla: SlaStatus | null;
 }
 
 export interface IncidentDetail extends Incident {
@@ -156,6 +166,7 @@ export interface IncidentMetrics {
   open_incidents: number;
   resolved_incidents: number;
   mttr_seconds: number | null;
+  sla_breaches: number;
   by_severity: Record<string, number>;
   resolved_last_days: { date: string; resolved: number }[];
 }
@@ -283,6 +294,11 @@ export const api = {
       body: JSON.stringify({ status }),
     }),
   incidentMetrics: () => request<IncidentMetrics>("/incidents/metrics"),
+  assignIncident: (id: string, assignee_email: string | null) =>
+    request<Incident>(`/incidents/${id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ assignee_email }),
+    }),
   incidentTimeline: (id: string) =>
     request<{ incident_id: string; events: TimelineEvent[] }>(
       `/incidents/${id}/timeline`

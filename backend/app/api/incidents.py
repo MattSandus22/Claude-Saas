@@ -21,15 +21,25 @@ from app.schemas import (
     AlertOut,
     ApplyActionRequest,
     ApplyActionResult,
+    IncidentAssign,
     IncidentDetail,
     IncidentOut,
     IncidentUpdate,
     RecommendedActionOut,
+    SlaStatus,
 )
 from app.services.audit import record
 from app.services.metrics import build_timeline, incident_metrics
 from app.services.recommend import recommend_actions
 from app.services.response import block_agent
+from app.services.sla import sla_status
+
+
+def _to_out(incident: Incident) -> IncidentOut:
+    """Serialize an incident with its live SLA status attached."""
+    out = IncidentOut.model_validate(incident)
+    out.sla = SlaStatus(**sla_status(incident))
+    return out
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -50,7 +60,7 @@ async def list_incidents(
         stmt = stmt.where(Incident.severity == severity)
     stmt = stmt.limit(limit)
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return [_to_out(i) for i in result.scalars().all()]
 
 
 @router.get("/metrics")
@@ -83,7 +93,7 @@ async def get_incident(
             .order_by(Alert.created_at.desc())
         )
     ).scalars().all()
-    detail = IncidentDetail.model_validate(incident)
+    detail = IncidentDetail.model_validate(_to_out(incident).model_dump())
     detail.alerts = [AlertOut.model_validate(a) for a in alerts]
     return detail
 
@@ -100,12 +110,18 @@ async def update_incident(
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found")
 
+    now = datetime.now(timezone.utc)
     new_status = AlertStatus(body.status)
     incident.status = new_status
+    # Stop the response-time SLA clock on the FIRST time the case leaves 'open'
+    # (acknowledged or resolved). Keep the earliest ack; don't reset it on later
+    # transitions, so the SLA reflects when a human first responded.
+    if new_status != AlertStatus.open and incident.acknowledged_at is None:
+        incident.acknowledged_at = now
     # Track closure time for MTTR; clear it if a resolved case is reopened so
     # metrics only reflect genuine closures.
     if new_status == AlertStatus.resolved:
-        incident.resolved_at = datetime.now(timezone.utc)
+        incident.resolved_at = now
     else:
         incident.resolved_at = None
     # Cascade to member alerts so the alert view and case view stay consistent.
@@ -119,9 +135,40 @@ async def update_incident(
     await record(db, actor=user.email, action="incident.update", target=incident_id,
                  detail={"status": body.status, "alerts_updated": len(member_alerts)})
 
-    detail = IncidentDetail.model_validate(incident)
+    detail = IncidentDetail.model_validate(_to_out(incident).model_dump())
     detail.alerts = [AlertOut.model_validate(a) for a in member_alerts]
     return detail
+
+
+@router.post("/{incident_id}/assign", response_model=IncidentOut)
+async def assign_incident(
+    incident_id: str,
+    body: IncidentAssign,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Assign a case to a user by email (or unassign with a null email)."""
+    incident = await db.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if body.assignee_email is None:
+        incident.assignee_id = None
+        detail = {"assignee": None}
+    else:
+        assignee = (
+            await db.execute(select(User).where(User.email == body.assignee_email))
+        ).scalar_one_or_none()
+        if assignee is None:
+            raise HTTPException(status_code=404, detail="Assignee user not found")
+        incident.assignee_id = assignee.id
+        detail = {"assignee": assignee.email}
+
+    await db.commit()
+    await db.refresh(incident)
+    await record(db, actor=user.email, action="incident.assign", target=incident_id,
+                 detail=detail)
+    return _to_out(incident)
 
 
 @router.get("/{incident_id}/recommended-actions", response_model=list[RecommendedActionOut])

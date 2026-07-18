@@ -114,6 +114,7 @@ guardrails:
 24. **Incident case management** *(Phase 10)* — Thirteen detection rules produce a stream of individual alerts; analysts work *incidents*, not a firehose. Alerts sharing a subject (server + agent) within a window are grouped into one case with a rolled‑up severity (as serious as its worst alert), a running alert count, and the set of contributing rules. Triaging a case cascades to its member alerts. Surfaced as an `/incidents` page in the dashboard and `GET/PATCH /incidents`; env‑tunable window (`INCIDENT_WINDOW_SECONDS`).
 25. **Incident response recommendations** *(Phase 11)* — Each case computes advisory containment actions from the rules that fired: agent‑behavior rules (R6–R8, R10–R12) suggest *containing the agent*; drift/rug‑pull (R9) and campaign correlation (R13) suggest *quarantining the server*. An admin can apply an action in one click from the case; the apply endpoint only permits actions the recommender suggested for that specific incident (a case can't be used as a lever against an unrelated subject), reuses the existing containment paths, and is fully audited.
 26. **Incident metrics & timeline** *(Phase 12)* — Operational reporting over the case load: open/resolved counts, **MTTR** (mean time to resolve, measured from the case's earliest alert to its closure), the severity mix, and a resolved‑per‑day trend — surfaced as metric tiles on the dashboard. Each case also has a **timeline** reconstructed from the incident, its member alerts, and the audit trail (opened → each alert → each triage action), with no separate event log to keep in sync. Resolving stamps a closure time; reopening clears it so MTTR only reflects genuine closures.
+27. **Incident assignments & SLAs** *(Phase 13)* — Cases can be assigned to an owner, and every case carries a severity‑scaled **response‑time SLA** (tighter for worse severities; env‑tunable via `SLA_*`). The SLA status — on‑track, due‑soon, breached, or met — is computed live on every list/detail response from how long the case stayed open before its first acknowledgement; acknowledging stops the clock. Open breaches are counted in the metrics endpoint and surfaced as a dashboard tile, with a per‑case SLA badge and an "assign to me" action.
 
 ---
 
@@ -290,6 +291,7 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `POST` | `/incidents/{id}/apply-action` | admin | Apply a recommended containment action (contain agent / quarantine server). |
 | `GET` | `/incidents/metrics` | any | Case‑load metrics: open/resolved counts, MTTR, severity mix, resolved trend. |
 | `GET` | `/incidents/{id}/timeline` | any | Chronological case activity (opened, alerts, triage actions). |
+| `POST` | `/incidents/{id}/assign` | any | Assign a case to a user by email (null email unassigns). |
 
 **Integration auth:** `/inspect`, `/servers/scan`, and `POST /servers` also
 accept an `X-API-Key: mcpg_…` header instead of a bearer token, so gateways and
@@ -370,10 +372,10 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 97 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
-#             incident grouping, response recommendations, MTTR/timeline) +
+# 108 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
+#             incident grouping, recommendations, MTTR/timeline, SLA) +
 #             integration (full API, quarantine, versioning/rollback, R10-R13,
-#             incident case management + apply-action + metrics/timeline)
+#             incident case mgmt + apply-action + metrics/timeline + assign/SLA)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest -q
@@ -405,6 +407,7 @@ The suite **simulates attacks and verifies defenses**:
 - incident grouping → alerts sharing a subject collapse into one case with the severity rolled up to the worst member; a second message within the window joins the open case; different subjects and stale cases get their own; resolving a case cascades to its alerts
 - response recommendations → agent‑behavior rules suggest containing the agent, drift/campaign rules suggest quarantining the server; applying from the case actually contains the agent (a later benign message is denied); an action the recommender didn't suggest for that case is refused; apply is admin‑only
 - metrics & timeline → resolving a case raises the resolved count and yields a non‑null MTTR; reopening clears the closure; the timeline orders opened → alert → triage action; `/incidents/metrics` resolves to metrics, not `get_incident("metrics")`
+- assignments & SLAs → targets scale with severity; a case on‑track/due‑soon/breached by elapsed time and met when acknowledged in time; acknowledging stops the SLA clock; assign/unassign by email (unknown user → 404); breaches counted in metrics
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -432,11 +435,12 @@ Claude-Saas/
 │   │   ├── services/incidents.py # case management: group alerts into incidents
 │   │   ├── services/recommend.py # incident -> advisory containment actions
 │   │   ├── services/metrics.py   # incident MTTR/volume metrics + case timeline
+│   │   ├── services/sla.py       # severity-scaled response-time SLA status
 │   │   ├── services/             # discovery, policy, inspector, audit, apikeys,
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (97 tests)
+│   └── tests/                    # unit + integration (108 tests)
 ├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
@@ -533,14 +537,20 @@ Shipped in Phase 12 ✅:
   resolved‑per‑day trend, plus a per‑case timeline reconstructed from the
   incident, its alerts, and the audit trail (no separate event log).
 
-Prioritized next (Phase 13):
+Shipped in Phase 13 ✅:
+
+- **Incident assignments & SLAs.** Case ownership plus severity‑scaled
+  response‑time SLAs with live on‑track/due‑soon/breached/met status, breach
+  counts in metrics, and per‑case badges.
+
+Prioritized next (Phase 14):
 
 1. **More integrations.** SIEM/Slack/PagerDuty alert routing and SSO/SCIM
-   (WorkOS/Okta).
+   (WorkOS/Okta) — external‑service plumbing.
 2. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego
    export, and per‑environment policy bundles.
-3. **Assignments & SLAs.** Assign incidents to owners and track against
-   severity‑based response‑time SLAs.
+3. **Scheduled SLA sweeps.** Proactively fire an alert/webhook the moment a case
+   breaches, rather than surfacing it only on read.
 
 ---
 
