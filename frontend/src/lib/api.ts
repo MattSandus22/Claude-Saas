@@ -66,6 +66,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Like request(), but for endpoints that return text/plain or YAML. */
+async function requestText(path: string, options: RequestInit = {}): Promise<string> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (!res.ok) {
+    throw new ApiError(res.status, `Request failed (${res.status})`);
+  }
+  return res.text();
+}
+
 export async function login(email: string, password: string): Promise<string> {
   // Backend uses OAuth2 password form (username = email).
   const body = new URLSearchParams({ username: email, password });
@@ -269,6 +283,13 @@ export const api = {
   createPolicy: (body: Record<string, unknown>) =>
     request<Policy>("/policies", { method: "POST", body: JSON.stringify(body) }),
   deletePolicy: (id: string) => request<void>(`/policies/${id}`, { method: "DELETE" }),
+  exportPolicies: () => requestText("/policies/export"),
+  importPolicies: (bundle: string) =>
+    request<{ created: string[]; updated: string[] }>("/policies/import", {
+      method: "POST",
+      body: JSON.stringify({ bundle }),
+    }),
+  policyRego: (id: string) => requestText(`/policies/${id}/rego`),
   audit: () => request<Record<string, unknown>[]>("/audit"),
   simulate: (body: Record<string, unknown>) =>
     request<SimulateResult>("/policies/simulate", {

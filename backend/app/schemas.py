@@ -294,6 +294,16 @@ class PolicyVersionOut(BaseModel):
     created_at: datetime
 
 
+class PolicyBundleImport(BaseModel):
+    # Raw YAML bundle text (as produced by GET /policies/export).
+    bundle: str = Field(min_length=1, max_length=1_000_000)
+
+
+class PolicyBundleImportResult(BaseModel):
+    created: list[str]
+    updated: list[str]
+
+
 # ---- Response actions ----
 class BlockedAgents(BaseModel):
     blocked_agents: list[str]

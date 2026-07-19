@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Trash2, Lock, FlaskConical } from "lucide-react";
+import { Plus, Trash2, Lock, FlaskConical, Download, Upload, FileCode } from "lucide-react";
 import { api, type Policy, type SimulateResult } from "@/lib/api";
 import { Card, Badge, Button, EmptyState } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
@@ -86,6 +86,50 @@ export default function PoliciesPage() {
     load();
   }
 
+  async function exportBundle() {
+    try {
+      const yaml = await api.exportPolicies();
+      const blob = new Blob([yaml], { type: "application/x-yaml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "mcpguard-policies.yaml";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Export failed");
+    }
+  }
+
+  async function importBundle(file: File) {
+    setError(null);
+    try {
+      const text = await file.text();
+      const res = await api.importPolicies(text);
+      setError(
+        `Imported: ${res.created.length} created, ${res.updated.length} updated.`
+      );
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Import failed");
+    }
+  }
+
+  async function downloadRego(id: string, name: string) {
+    try {
+      const rego = await api.policyRego(id);
+      const blob = new Blob([rego], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${name}.rego`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Rego export failed");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between">
@@ -100,6 +144,24 @@ export default function PoliciesPage() {
           <Button variant="ghost" onClick={() => setShowSim((s) => !s)}>
             <FlaskConical size={15} /> Simulate
           </Button>
+          <Button variant="ghost" onClick={exportBundle}>
+            <Download size={15} /> Export
+          </Button>
+          {isAdmin && (
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-transparent px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-surface-2">
+              <Upload size={15} /> Import
+              <input
+                type="file"
+                accept=".yaml,.yml"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) importBundle(f);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          )}
           {isAdmin && (
             <Button onClick={() => setShowForm((s) => !s)}>
               <Plus size={15} /> New policy
@@ -260,15 +322,24 @@ export default function PoliciesPage() {
                   </div>
                   <p className="mt-1 text-xs text-muted">{p.description || "No description"}</p>
                 </div>
-                {isAdmin && (
+                <div className="flex items-center gap-3">
                   <button
-                    onClick={() => remove(p.id)}
-                    className="text-muted transition-colors hover:text-danger"
-                    title="Delete policy"
+                    onClick={() => downloadRego(p.id, p.name)}
+                    className="text-muted transition-colors hover:text-brand"
+                    title="Export as OPA Rego"
                   >
-                    <Trash2 size={15} />
+                    <FileCode size={15} />
                   </button>
-                )}
+                  {isAdmin && (
+                    <button
+                      onClick={() => remove(p.id)}
+                      className="text-muted transition-colors hover:text-danger"
+                      title="Delete policy"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </div>
               </div>
               <pre className="overflow-x-auto rounded-lg border border-border bg-bg p-3 text-xs text-slate-400">
                 {JSON.stringify(p.rules, null, 2)}

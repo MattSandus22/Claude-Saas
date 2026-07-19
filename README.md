@@ -118,6 +118,7 @@ guardrails:
 28. **SLA breach sweep & notification** *(Phase 14)* — A read‑time SLA status nobody looks at helps no one, so `POST /incidents/sweep-sla` is the push half: it finds open cases that have breached their SLA, raises a synthetic breach alert attached to the case (high, or critical for a critical case), and fires the alert notifier (webhook, or simulation‑logged) — exactly once per case. Idempotent and admin‑only; meant to run on a schedule (cron/systemd timer) or from the dashboard's "Sweep SLA" button.
 29. **Slack‑format alert routing** *(Phase 15)* — The webhook notifier can emit a Slack incoming‑webhook message (Block Kit: a severity‑emoji header, one section per alert, a color bar keyed to the worst severity, and a fallback text line) instead of the generic `{source, alerts}` JSON. The format is chosen by `ALERT_WEBHOOK_FORMAT` (`auto` / `slack` / `generic`); `auto` sends Slack shape to a `hooks.slack.com` URL and generic everywhere else. Same SSRF guard and simulation mode; the payload builder is pure and unit‑tested.
 30. **PagerDuty & SIEM (CEF) routing** *(Phase 16)* — Two more outbound formats: a **PagerDuty Events API v2** trigger event (severity‑mapped, with a dedup key so a burst pages once) and **ArcSight CEF** text lines for SIEM ingestion (Splunk/QRadar), one CEF line per alert with spec‑correct header/extension escaping, sent as `text/plain`. `auto` also detects `events.pagerduty.com`; CEF is selected explicitly. PagerDuty needs `PAGERDUTY_ROUTING_KEY` and refuses to send without it. Both builders are pure and unit‑tested.
+31. **Policy‑as‑code: bundle export/import + OPA Rego** *(Phase 17)* — Export every policy to a single **YAML bundle** (`GET /policies/export`) you can commit to Git, and reconcile an environment back with `POST /policies/import` — matched‑by‑name policies are updated (and version‑snapshotted), new ones created, and policies absent from the bundle are left untouched (a bundle adds/updates, never silently deletes). Import validates the whole bundle before mutating anything (all‑or‑nothing). A policy also exports as an **OPA Rego** module (`GET /policies/{id}/rego`) so the same allow/deny intent runs in an external policy engine. Dashboard gets Export/Import buttons and a per‑policy Rego download.
 
 ---
 
@@ -287,6 +288,9 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `GET` | `/agents/{id}/baseline` | any | Live per‑agent volume baseline (mean/stddev/current z‑score). |
 | `GET` | `/policies/{id}/versions` | any | Immutable version history of a policy. |
 | `POST` | `/policies/{id}/rollback/{version}` | admin | Restore a policy to a prior version (as a new version). |
+| `GET` | `/policies/export` | any | Export all policies as a YAML bundle (policy‑as‑code). |
+| `POST` | `/policies/import` | admin | Reconcile the policy set to a YAML bundle (adds/updates, never deletes). |
+| `GET` | `/policies/{id}/rego` | any | Export a policy as an OPA/Rego module. |
 | `GET` | `/incidents` | any | List incidents (cases), most‑recently‑active first. |
 | `GET` | `/incidents/{id}` | any | One incident with its member alerts. |
 | `PATCH` | `/incidents/{id}` | any | Triage a case; cascades status to member alerts. |
@@ -376,10 +380,10 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 130 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
+# 139 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
 #             incident grouping, recommendations, MTTR/timeline, SLA + sweep,
-#             Slack/PagerDuty/CEF routing) + integration (full API, quarantine,
-#             versioning/rollback, R10-R13, incident lifecycle end-to-end)
+#             Slack/PagerDuty/CEF routing, policy bundle + Rego) + integration
+#             (full API, quarantine, versioning/rollback/export/import, incident lifecycle)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest -q
@@ -415,6 +419,7 @@ The suite **simulates attacks and verifies defenses**:
 - SLA sweep → a breached open case yields one breach alert attached to it and marks the case notified; a second sweep is idempotent; an acknowledged case is never swept; the breach fires the notifier; the endpoint is admin‑only
 - Slack routing → the Block Kit builder keys its color bar and header to the worst severity, renders one section per alert, and summarizes overflow; `auto` format sends Slack shape to a slack.com host and generic elsewhere; an explicit override wins; the outbound body matches the selected shape
 - PagerDuty/CEF routing → the PagerDuty builder maps severity and sets a dedup key; the CEF builder escapes header pipes and extension `=`/newlines and emits one line per alert; `auto` detects `events.pagerduty.com`; CEF is sent as `text/plain`; PagerDuty refuses to send without a routing key
+- policy bundle → export/import round‑trips through YAML; import creates new, updates matched (with a version snapshot), never deletes, and rejects a bundle with unknown rule keys or bad shape (422); import is admin‑only; Rego export renders every rule family into a valid OPA module
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -444,11 +449,12 @@ Claude-Saas/
 │   │   ├── services/metrics.py   # incident MTTR/volume metrics + case timeline
 │   │   ├── services/sla.py       # severity-scaled response-time SLA status
 │   │   ├── services/sla_sweep.py # push breach alerts + notify (once per case)
+│   │   ├── services/policybundle.py # YAML bundle export/import + OPA Rego
 │   │   ├── services/             # discovery, policy, inspector, audit, apikeys,
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (130 tests)
+│   └── tests/                    # unit + integration (139 tests)
 ├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
@@ -569,11 +575,16 @@ Shipped in Phase 16 ✅:
   (severity‑mapped, dedup‑keyed) and ArcSight CEF text for SIEM ingestion, both
   auto‑detected or forced via `ALERT_WEBHOOK_FORMAT`.
 
-Prioritized next (Phase 17):
+Shipped in Phase 17 ✅:
 
-1. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego
-   export, and per‑environment policy bundles — mostly local, largely testable.
-2. **SSO/SCIM** (WorkOS/Okta) — external‑service plumbing that needs live creds.
+- **Policy‑as‑code: bundle export/import + OPA Rego.** Export the policy set to a
+  Git‑committable YAML bundle, reconcile an environment back (add/update, never
+  delete), and export any policy as an OPA Rego module.
+
+Prioritized next (Phase 18):
+
+1. **SSO/SCIM** (WorkOS/Okta) — external‑service plumbing that needs live creds
+   (would ship as an explicitly‑mocked scaffold, not verifiable here).
 
 ---
 

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from sqlalchemy import func
 
 from app.api.deps import get_current_user, require_admin
 from app.db.session import get_db
 from app.models import Policy, PolicyVersion, User
 from app.schemas import (
+    PolicyBundleImport,
+    PolicyBundleImportResult,
     PolicyCreate,
     PolicyOut,
     PolicyVersionOut,
@@ -19,6 +19,7 @@ from app.schemas import (
     SimulateResult,
 )
 from app.services.audit import record
+from app.services.policybundle import parse_bundle, policies_to_bundle, policy_to_rego
 from app.services.simulate import simulate_message
 
 router = APIRouter(prefix="/policies", tags=["policies"])
@@ -79,6 +80,75 @@ async def list_policies(
 ):
     result = await db.execute(select(Policy).order_by(Policy.created_at.desc()))
     return list(result.scalars().all())
+
+
+@router.get("/export")
+async def export_bundle(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Export all policies as a YAML bundle (commit it to Git for policy-as-code).
+
+    Literal path; declared before any /{policy_id} route.
+    """
+    result = await db.execute(select(Policy).order_by(Policy.name.asc()))
+    policies = [
+        {"name": p.name, "description": p.description, "enabled": p.enabled,
+         "rules": p.rules}
+        for p in result.scalars().all()
+    ]
+    yaml_text = policies_to_bundle(policies)
+    return Response(
+        content=yaml_text,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": "attachment; filename=mcpguard-policies.yaml"},
+    )
+
+
+@router.post("/import", response_model=PolicyBundleImportResult)
+async def import_bundle(
+    body: PolicyBundleImport,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Reconcile the policy set to a YAML bundle (admin-only).
+
+    A policy matched by name is updated (and version-snapshotted); a new name is
+    created. Policies not present in the bundle are left untouched — a bundle
+    adds/updates, it never silently deletes.
+    """
+    try:
+        parsed = parse_bundle(body.bundle)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    # Validate every policy's rules before mutating anything (all-or-nothing).
+    for p in parsed:
+        _validate_rules(p["rules"])
+
+    created: list[str] = []
+    updated: list[str] = []
+    for p in parsed:
+        existing = (
+            await db.execute(select(Policy).where(Policy.name == p["name"]))
+        ).scalar_one_or_none()
+        if existing is None:
+            policy = Policy(name=p["name"], description=p["description"],
+                            enabled=p["enabled"], rules=p["rules"])
+            db.add(policy)
+            await db.flush()
+            await _snapshot(db, policy, changed_by=admin.email, note="imported")
+            created.append(p["name"])
+        else:
+            existing.description = p["description"]
+            existing.enabled = p["enabled"]
+            existing.rules = p["rules"]
+            await _snapshot(db, existing, changed_by=admin.email, note="imported (update)")
+            updated.append(p["name"])
+
+    await db.commit()
+    await record(db, actor=admin.email, action="policy.import",
+                 detail={"created": len(created), "updated": len(updated)})
+    return PolicyBundleImportResult(created=created, updated=updated)
 
 
 @router.post("/simulate", response_model=SimulateResult)
@@ -155,6 +225,24 @@ async def update_policy(
     await db.refresh(policy)
     await record(db, actor=admin.email, action="policy.update", target=policy_id)
     return policy
+
+
+@router.get("/{policy_id}/rego")
+async def export_rego(
+    policy_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Export a policy as an OPA Rego module (run the same intent in OPA)."""
+    policy = await db.get(Policy, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    rego = policy_to_rego(policy.name, policy.rules or {})
+    return Response(
+        content=rego,
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={policy.name}.rego"},
+    )
 
 
 @router.get("/{policy_id}/versions", response_model=list[PolicyVersionOut])
