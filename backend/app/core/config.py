@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     ALERT_WEBHOOK_ALLOW_INSECURE: bool = False
     ALERT_WEBHOOK_ALLOW_PRIVATE: bool = False
 
+    # Prometheus /metrics exposition. Disabled by default (secure default:
+    # internal counts should not be exposed unauthenticated). When a token is
+    # set, the root-level /metrics endpoint requires `Authorization: Bearer
+    # <token>`; when unset, /metrics returns 404.
+    PROMETHEUS_BEARER_TOKEN: str | None = Field(default=None)
+
     # Bootstrap admin (seeded on first run if no users exist).
     FIRST_ADMIN_EMAIL: str = "admin@mcpguard.local"
     FIRST_ADMIN_PASSWORD: str = "ChangeMe!Admin123"

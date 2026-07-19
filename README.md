@@ -119,6 +119,7 @@ guardrails:
 29. **Slack‑format alert routing** *(Phase 15)* — The webhook notifier can emit a Slack incoming‑webhook message (Block Kit: a severity‑emoji header, one section per alert, a color bar keyed to the worst severity, and a fallback text line) instead of the generic `{source, alerts}` JSON. The format is chosen by `ALERT_WEBHOOK_FORMAT` (`auto` / `slack` / `generic`); `auto` sends Slack shape to a `hooks.slack.com` URL and generic everywhere else. Same SSRF guard and simulation mode; the payload builder is pure and unit‑tested.
 30. **PagerDuty & SIEM (CEF) routing** *(Phase 16)* — Two more outbound formats: a **PagerDuty Events API v2** trigger event (severity‑mapped, with a dedup key so a burst pages once) and **ArcSight CEF** text lines for SIEM ingestion (Splunk/QRadar), one CEF line per alert with spec‑correct header/extension escaping, sent as `text/plain`. `auto` also detects `events.pagerduty.com`; CEF is selected explicitly. PagerDuty needs `PAGERDUTY_ROUTING_KEY` and refuses to send without it. Both builders are pure and unit‑tested.
 31. **Policy‑as‑code: bundle export/import + OPA Rego** *(Phase 17)* — Export every policy to a single **YAML bundle** (`GET /policies/export`) you can commit to Git, and reconcile an environment back with `POST /policies/import` — matched‑by‑name policies are updated (and version‑snapshotted), new ones created, and policies absent from the bundle are left untouched (a bundle adds/updates, never silently deletes). Import validates the whole bundle before mutating anything (all‑or‑nothing). A policy also exports as an **OPA Rego** module (`GET /policies/{id}/rego`) so the same allow/deny intent runs in an external policy engine. Dashboard gets Export/Import buttons and a per‑policy Rego download.
+32. **Prometheus `/metrics` exposition** *(Phase 18)* — A root‑level `/metrics` endpoint exports MCPGuard's own operational counts (servers by status, events/blocked totals, suspicious tools, alerts by severity+status, open/resolved incidents, SLA breaches) in the Prometheus text exposition format for scraping and alerting. Secure by default: disabled (404) unless `PROMETHEUS_BEARER_TOKEN` is set, and then it requires that bearer token — internal counts are never exposed unauthenticated. Mounted outside the API prefix, so a scraper doesn't consume API rate‑limit budget. The text formatter is pure and unit‑tested.
 
 ---
 
@@ -300,6 +301,8 @@ All endpoints are under `/api/v1` and (except `/auth/login`) require a
 | `GET` | `/incidents/{id}/timeline` | any | Chronological case activity (opened, alerts, triage actions). |
 | `POST` | `/incidents/{id}/assign` | any | Assign a case to a user by email (null email unassigns). |
 | `POST` | `/incidents/sweep-sla` | admin | Raise + notify a breach alert for each newly‑breached open case (idempotent). |
+| `GET` | `/health` | — | Liveness probe (root path, unauthenticated). |
+| `GET` | `/metrics` | bearer | Prometheus text metrics (root path; 404 unless `PROMETHEUS_BEARER_TOKEN` set). |
 
 **Integration auth:** `/inspect`, `/servers/scan`, and `POST /servers` also
 accept an `X-API-Key: mcpg_…` header instead of a bearer token, so gateways and
@@ -380,10 +383,10 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 139 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
+# 145 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
 #             incident grouping, recommendations, MTTR/timeline, SLA + sweep,
-#             Slack/PagerDuty/CEF routing, policy bundle + Rego) + integration
-#             (full API, quarantine, versioning/rollback/export/import, incident lifecycle)
+#             Slack/PagerDuty/CEF routing, policy bundle + Rego, Prometheus) +
+#             integration (full API, quarantine, versioning/export/import, /metrics gate)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest -q
@@ -420,6 +423,7 @@ The suite **simulates attacks and verifies defenses**:
 - Slack routing → the Block Kit builder keys its color bar and header to the worst severity, renders one section per alert, and summarizes overflow; `auto` format sends Slack shape to a slack.com host and generic elsewhere; an explicit override wins; the outbound body matches the selected shape
 - PagerDuty/CEF routing → the PagerDuty builder maps severity and sets a dedup key; the CEF builder escapes header pipes and extension `=`/newlines and emits one line per alert; `auto` detects `events.pagerduty.com`; CEF is sent as `text/plain`; PagerDuty refuses to send without a routing key
 - policy bundle → export/import round‑trips through YAML; import creates new, updates matched (with a version snapshot), never deletes, and rejects a bundle with unknown rule keys or bad shape (422); import is admin‑only; Rego export renders every rule family into a valid OPA module
+- Prometheus /metrics → the formatter emits HELP/TYPE lines, integer values without a trailing `.0`, and escaped labels; the endpoint is 404 when disabled, 401 without/with a wrong bearer, and returns live counts (events/alerts/incidents/SLA breaches) with the exposition content type when authorized
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -450,11 +454,12 @@ Claude-Saas/
 │   │   ├── services/sla.py       # severity-scaled response-time SLA status
 │   │   ├── services/sla_sweep.py # push breach alerts + notify (once per case)
 │   │   ├── services/policybundle.py # YAML bundle export/import + OPA Rego
+│   │   ├── services/prometheus.py # Prometheus text exposition of platform counts
 │   │   ├── services/             # discovery, policy, inspector, audit, apikeys,
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (139 tests)
+│   └── tests/                    # unit + integration (145 tests)
 ├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
@@ -581,10 +586,18 @@ Shipped in Phase 17 ✅:
   Git‑committable YAML bundle, reconcile an environment back (add/update, never
   delete), and export any policy as an OPA Rego module.
 
-Prioritized next (Phase 18):
+Shipped in Phase 18 ✅:
+
+- **Prometheus `/metrics` exposition.** Root‑level, bearer‑gated (disabled by
+  default) Prometheus text metrics of the platform's own posture for scraping
+  and alerting.
+
+Prioritized next (Phase 19):
 
 1. **SSO/SCIM** (WorkOS/Okta) — external‑service plumbing that needs live creds
    (would ship as an explicitly‑mocked scaffold, not verifiable here).
+2. **Grafana dashboard JSON** for the `/metrics` series — self‑contained and
+   testable (a JSON builder), a natural companion to Phase 18.
 
 ---
 

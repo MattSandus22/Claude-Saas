@@ -12,9 +12,10 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import (
     agents,
@@ -29,8 +30,9 @@ from app.api import (
 )
 from app.core.config import settings
 from app.core.ratelimit import RateLimitMiddleware
-from app.db.session import AsyncSessionLocal, init_db
+from app.db.session import AsyncSessionLocal, get_db, init_db
 from app.services.bootstrap import seed_admin, seed_default_policy
+from app.services.prometheus import collect_metrics, render_exposition
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcpguard")
@@ -92,6 +94,27 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.get("/health", tags=["system"])
 async def health():
     return {"status": "ok", "service": settings.PROJECT_NAME, "version": "0.1.0"}
+
+
+@app.get("/metrics", tags=["system"], response_class=PlainTextResponse)
+async def metrics(request: Request, db: AsyncSession = Depends(get_db)):
+    """Prometheus text exposition of MCPGuard's operational counts.
+
+    Disabled (404) unless PROMETHEUS_BEARER_TOKEN is set; when set, requires
+    `Authorization: Bearer <token>` — internal counts are never exposed
+    unauthenticated. Mounted at the root path per Prometheus convention (not
+    under the API prefix, so it is not rate-limited alongside API traffic).
+    """
+    token = settings.PROMETHEUS_BEARER_TOKEN
+    if not token:
+        # Endpoint disabled: do not reveal that it exists.
+        raise HTTPException(status_code=404, detail="Not Found")
+    presented = request.headers.get("authorization", "")
+    if presented != f"Bearer {token}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = render_exposition(await collect_metrics(db))
+    # Prometheus text exposition content type.
+    return PlainTextResponse(body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 # Mount routers under the versioned prefix.
