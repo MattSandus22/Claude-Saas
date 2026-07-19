@@ -91,10 +91,17 @@ class Settings(BaseSettings):
     # Alert webhook. Unset => simulation mode (alerts logged, not sent).
     ALERT_WEBHOOK_URL: str | None = Field(default=None)
     ALERT_WEBHOOK_MIN_SEVERITY: str = "high"
-    # Payload shape: "generic" ({source, alerts}) or "slack" (Block Kit message
-    # for a Slack incoming webhook). Auto-detects Slack when the URL host is a
-    # Slack hooks endpoint, unless overridden here.
+    # Payload shape: "auto" | "generic" | "slack" | "pagerduty" | "cef".
+    #   generic   -> {source, alerts} JSON
+    #   slack     -> Slack incoming-webhook Block Kit message
+    #   pagerduty -> PagerDuty Events API v2 enqueue event
+    #   cef       -> ArcSight CEF text lines (Splunk/QRadar/generic SIEM)
+    # "auto" detects Slack (hooks.slack.com) and PagerDuty (events.pagerduty.com),
+    # falling back to generic. CEF must be selected explicitly.
     ALERT_WEBHOOK_FORMAT: str = "auto"
+    # PagerDuty Events API v2 routing key (integration key). Required for the
+    # pagerduty format; sent in the event body, never logged.
+    PAGERDUTY_ROUTING_KEY: str | None = Field(default=None)
     # Dev-only escape hatches for the SSRF guard; never enable in production.
     ALERT_WEBHOOK_ALLOW_INSECURE: bool = False
     ALERT_WEBHOOK_ALLOW_PRIVATE: bool = False

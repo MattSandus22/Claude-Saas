@@ -117,6 +117,7 @@ guardrails:
 27. **Incident assignments & SLAs** *(Phase 13)* — Cases can be assigned to an owner, and every case carries a severity‑scaled **response‑time SLA** (tighter for worse severities; env‑tunable via `SLA_*`). The SLA status — on‑track, due‑soon, breached, or met — is computed live on every list/detail response from how long the case stayed open before its first acknowledgement; acknowledging stops the clock. Open breaches are counted in the metrics endpoint and surfaced as a dashboard tile, with a per‑case SLA badge and an "assign to me" action.
 28. **SLA breach sweep & notification** *(Phase 14)* — A read‑time SLA status nobody looks at helps no one, so `POST /incidents/sweep-sla` is the push half: it finds open cases that have breached their SLA, raises a synthetic breach alert attached to the case (high, or critical for a critical case), and fires the alert notifier (webhook, or simulation‑logged) — exactly once per case. Idempotent and admin‑only; meant to run on a schedule (cron/systemd timer) or from the dashboard's "Sweep SLA" button.
 29. **Slack‑format alert routing** *(Phase 15)* — The webhook notifier can emit a Slack incoming‑webhook message (Block Kit: a severity‑emoji header, one section per alert, a color bar keyed to the worst severity, and a fallback text line) instead of the generic `{source, alerts}` JSON. The format is chosen by `ALERT_WEBHOOK_FORMAT` (`auto` / `slack` / `generic`); `auto` sends Slack shape to a `hooks.slack.com` URL and generic everywhere else. Same SSRF guard and simulation mode; the payload builder is pure and unit‑tested.
+30. **PagerDuty & SIEM (CEF) routing** *(Phase 16)* — Two more outbound formats: a **PagerDuty Events API v2** trigger event (severity‑mapped, with a dedup key so a burst pages once) and **ArcSight CEF** text lines for SIEM ingestion (Splunk/QRadar), one CEF line per alert with spec‑correct header/extension escaping, sent as `text/plain`. `auto` also detects `events.pagerduty.com`; CEF is selected explicitly. PagerDuty needs `PAGERDUTY_ROUTING_KEY` and refuses to send without it. Both builders are pure and unit‑tested.
 
 ---
 
@@ -375,10 +376,10 @@ Security decisions are commented inline where they're enforced. Highlights:
 ```bash
 cd backend && source .venv/bin/activate
 python -m pytest -q
-# 120 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
+# 130 passed — unit (detection, policy, sanitizer, drift, baselines, correlation,
 #             incident grouping, recommendations, MTTR/timeline, SLA + sweep,
-#             Slack routing) + integration (full API, quarantine, versioning/rollback,
-#             R10-R13, incident case mgmt + apply/metrics/timeline/assign/SLA/sweep)
+#             Slack/PagerDuty/CEF routing) + integration (full API, quarantine,
+#             versioning/rollback, R10-R13, incident lifecycle end-to-end)
 
 # Gateway sidecar (dependency-free, from repo root):
 cd gateway && python -m pytest -q
@@ -413,6 +414,7 @@ The suite **simulates attacks and verifies defenses**:
 - assignments & SLAs → targets scale with severity; a case on‑track/due‑soon/breached by elapsed time and met when acknowledged in time; acknowledging stops the SLA clock; assign/unassign by email (unknown user → 404); breaches counted in metrics
 - SLA sweep → a breached open case yields one breach alert attached to it and marks the case notified; a second sweep is idempotent; an acknowledged case is never swept; the breach fires the notifier; the endpoint is admin‑only
 - Slack routing → the Block Kit builder keys its color bar and header to the worst severity, renders one section per alert, and summarizes overflow; `auto` format sends Slack shape to a slack.com host and generic elsewhere; an explicit override wins; the outbound body matches the selected shape
+- PagerDuty/CEF routing → the PagerDuty builder maps severity and sets a dedup key; the CEF builder escapes header pipes and extension `=`/newlines and emits one line per alert; `auto` detects `events.pagerduty.com`; CEF is sent as `text/plain`; PagerDuty refuses to send without a routing key
 
 CI runs both suites on every push and pull request (`.github/workflows/ci.yml`).
 
@@ -446,7 +448,7 @@ Claude-Saas/
 │   │   │                         #   notify, drift, response, simulate
 │   │   └── db/session.py         # async engine/session
 │   ├── seeds/demo_data.py        # realistic demo seeder
-│   └── tests/                    # unit + integration (120 tests)
+│   └── tests/                    # unit + integration (130 tests)
 ├── gateway/                      # inline enforcement sidecars (stdlib-only)
 │   ├── mcpguard_gateway.py       # stdio JSON-RPC proxy + /inspect enforcement
 │   ├── mcpguard_http_gateway.py  # HTTP/SSE reverse-proxy enforcement
@@ -561,13 +563,17 @@ Shipped in Phase 15 ✅:
   messages (auto‑detected for `hooks.slack.com`, or forced via
   `ALERT_WEBHOOK_FORMAT`), keeping the same SSRF guard and simulation mode.
 
-Prioritized next (Phase 16):
+Shipped in Phase 16 ✅:
 
-1. **PagerDuty / generic SIEM routing.** More outbound formats (PagerDuty Events
-   API, CEF/JSON for Splunk) alongside the Slack shape.
+- **PagerDuty & SIEM (CEF) routing.** PagerDuty Events API v2 trigger events
+  (severity‑mapped, dedup‑keyed) and ArcSight CEF text for SIEM ingestion, both
+  auto‑detected or forced via `ALERT_WEBHOOK_FORMAT`.
+
+Prioritized next (Phase 17):
+
+1. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego
+   export, and per‑environment policy bundles — mostly local, largely testable.
 2. **SSO/SCIM** (WorkOS/Okta) — external‑service plumbing that needs live creds.
-3. **Policy‑as‑code at scale.** Git sync for versioned policies, OPA/Rego
-   export, and per‑environment policy bundles.
 
 ---
 
