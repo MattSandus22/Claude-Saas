@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import secrets
 from functools import lru_cache
-from typing import List
+from typing import Annotated, List
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -41,7 +41,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     # CORS: comma-separated origins. Never use "*" together with credentials.
-    CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000"])
+    # NoDecode: pydantic-settings otherwise tries to JSON-parse list-typed env
+    # vars before our validator runs, so a plain comma-separated string (the
+    # documented .env.example format) would crash at startup. NoDecode hands
+    # the raw string straight to the "before" validator below.
+    CORS_ORIGINS: Annotated[List[str], NoDecode] = Field(
+        default=["http://localhost:3000"]
+    )
 
     # Behavioral anomaly thresholds (R6-R8). Tune per deployment; conservative
     # defaults. Window values are seconds.
