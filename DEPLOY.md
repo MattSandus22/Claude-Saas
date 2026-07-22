@@ -115,6 +115,19 @@ The API is served under `/api/v1` (e.g. `POST /api/v1/auth/login`).
    it later you must **redeploy** the frontend for it to take effect.
 5. Deploy. Vercel gives you a URL like `https://your-app.vercel.app`.
 
+### Troubleshooting: "No entry point" / build output errors on Vercel
+
+Two things cause this, in order of likelihood:
+
+1. **Root Directory not set to `frontend`.** This repo has `backend/`,
+   `frontend/`, and `gateway/` at the top level. If Vercel builds from the repo
+   root it finds no Next.js app and fails. Set **Settings → Build & Deployment →
+   Root Directory = `frontend`**.
+2. **Standalone output.** `next.config.js` only emits the standalone Node bundle
+   when `DOCKER_BUILD=1` is set (the Dockerfile sets it); Vercel does not, so it
+   gets Vercel's normal build output. If you're on an older checkout where
+   standalone was unconditional, pull the latest `main`.
+
 ### Close the loop
 
 Go back to the backend (step 2) and set `CORS_ORIGINS` to that exact Vercel URL,

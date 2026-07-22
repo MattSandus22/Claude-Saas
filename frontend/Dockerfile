@@ -12,6 +12,8 @@ COPY . .
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_TELEMETRY_DISABLED=1
+# Enables `output: "standalone"` in next.config.js for this container build.
+ENV DOCKER_BUILD=1
 RUN npm run build
 
 FROM node:22-slim AS runner
